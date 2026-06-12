@@ -1,0 +1,170 @@
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { OrderStatus, UserRole } from '@pos/shared';
+import { JwtAuthGuard } from '../../../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../../../common/guards/roles.guard';
+import { Roles } from '../../../../common/decorators/roles.decorator';
+import { ModuleGuard } from '../../../../common/guards/module.guard';
+import { RequiresModule } from '../../../../common/decorators/module-flags.decorator';
+import {
+  CurrentTenant,
+  CurrentUser,
+  JwtPayload,
+} from '../../../../common/decorators/tenant.decorator';
+import { CreateOrderDto } from '../../application/dto/create-order.dto';
+import { UpdateOrderStatusDto } from '../../application/dto/update-order-status.dto';
+import { RegisterOrderPaymentDto } from '../../application/dto/register-order-payment.dto';
+import { CreateOrderUseCase } from '../../application/use-cases/create-order.use-case';
+import { GetOrderUseCase } from '../../application/use-cases/get-order.use-case';
+import { ListOrdersUseCase } from '../../application/use-cases/list-orders.use-case';
+import { UpdateOrderStatusUseCase } from '../../application/use-cases/update-order-status.use-case';
+import { RegisterOrderPaymentUseCase } from '../../application/use-cases/register-order-payment.use-case';
+import { EditOrderUseCase } from '../../application/use-cases/edit-order.use-case';
+import { EditOrderDto } from '../../application/dto/edit-order.dto';
+import { ResetOrderSequenceUseCase } from '../../application/use-cases/reset-order-sequence.use-case';
+
+@Controller('orders')
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequiresModule('ordersEnabled')
+export class OrderController {
+  constructor(
+    private readonly createOrderUseCase: CreateOrderUseCase,
+    private readonly listOrdersUseCase: ListOrdersUseCase,
+    private readonly getOrderUseCase: GetOrderUseCase,
+    private readonly updateOrderStatusUseCase: UpdateOrderStatusUseCase,
+    private readonly registerOrderPaymentUseCase: RegisterOrderPaymentUseCase,
+    private readonly editOrderUseCase: EditOrderUseCase,
+    private readonly resetOrderSequenceUseCase: ResetOrderSequenceUseCase,
+  ) {}
+
+  @Post()
+  create(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateOrderDto,
+  ) {
+    // CASHIER uses their fixed JWT branchId; OWNER passes branchId in the request body
+    const branchId = user.branchId ?? dto.branchId;
+    if (!branchId) {
+      throw new BadRequestException('branchId is required. Select a branch before creating an order.');
+    }
+    return this.createOrderUseCase.execute(tenantId, branchId, user.sub, user.role, dto);
+  }
+
+  @Get()
+  findAll(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('date') date?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('status') status?: OrderStatus,
+    @Query('branchId') branchId?: string,
+    @Query('customerId', new ParseUUIDPipe({ optional: true })) customerId?: string,
+    @Query('q') q?: string,
+    @Query('page') pageStr?: string,
+    @Query('limit') limitStr?: string,
+  ) {
+    // Cashiers can only see their own branch; owners can filter or see all
+    const effectiveBranchId = user.branchId ?? branchId;
+    const page  = pageStr  ? Number(pageStr)  : undefined;
+    const limit = limitStr ? Number(limitStr) : undefined;
+    return this.listOrdersUseCase.execute(tenantId, { date, from, to, status, branchId: effectiveBranchId, customerId, q, page, limit });
+  }
+
+  @Get(':id')
+  findOne(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.getOrderUseCase.execute(id, tenantId).then((order) => {
+      if (user.branchId && order.branchId !== user.branchId) {
+        throw new ForbiddenException('No tienes permisos para ver pedidos de otra sucursal');
+      }
+      return order;
+    });
+  }
+
+  @Post(':id/payments')
+  registerPayments(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RegisterOrderPaymentDto,
+  ) {
+    return this.getOrderUseCase.execute(id, tenantId).then((order) => {
+      if (user.branchId && order.branchId !== user.branchId) {
+        throw new ForbiddenException('No tienes permisos para cobrar pedidos de otra sucursal');
+      }
+      return this.registerOrderPaymentUseCase.execute(tenantId, id, user.role, dto);
+    });
+  }
+
+  @Patch(':id')
+  edit(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EditOrderDto,
+  ) {
+    return this.getOrderUseCase.execute(id, tenantId).then(async (order) => {
+      if (user.branchId && order.branchId !== user.branchId) {
+        throw new ForbiddenException('No tienes permisos para editar pedidos de otra sucursal');
+      }
+
+      if (
+        order.status === OrderStatus.DELIVERED &&
+        user.role === UserRole.CASHIER
+      ) {
+        throw new ForbiddenException('Los cajeros no pueden editar pedidos ya entregados');
+      }
+
+      return this.editOrderUseCase.execute(id, tenantId, dto);
+    });
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateOrderStatusDto,
+  ) {
+    return this.getOrderUseCase.execute(id, tenantId).then(async (order) => {
+      if (user.branchId && order.branchId !== user.branchId) {
+        throw new ForbiddenException('No tienes permisos para actualizar pedidos de otra sucursal');
+      }
+
+      if (
+        dto.status === OrderStatus.CANCELLED &&
+        order.status === OrderStatus.DELIVERED &&
+        user.role === UserRole.CASHIER
+      ) {
+        throw new ForbiddenException('Los cajeros no pueden cancelar pedidos ya entregados');
+      }
+
+      return this.updateOrderStatusUseCase.execute(id, tenantId, dto.status);
+    });
+  }
+
+  @Post('reset-sequence')
+  @HttpCode(200)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.OWNER)
+  resetSequence(@CurrentTenant() tenantId: string) {
+    return this.resetOrderSequenceUseCase.execute(tenantId);
+  }
+}

@@ -1,0 +1,335 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+/* ─── Design Tokens ──────────────────────────────────────── */
+@theme {
+  /* Fonts */
+  --font-sans: 'Outfit', sans-serif;
+  --font-heading: 'Plus Jakarta Sans', sans-serif;
+
+  /* Primary — orange vivid */
+  --color-primary-50:  oklch(0.15 0.04  42);
+  --color-primary-100: oklch(0.21 0.08  42);
+  --color-primary-200: oklch(0.30 0.13  42);
+  --color-primary-300: oklch(0.47 0.18  42);
+  --color-primary-400: oklch(0.62 0.21  42);
+  --color-primary-500: oklch(0.65 0.22  42);
+  --color-primary-600: oklch(0.60 0.22  40);
+  --color-primary-700: oklch(0.50 0.20  38);
+  --color-primary-800: oklch(0.36 0.15  36);
+  --color-primary-900: oklch(0.22 0.10  34);
+
+  /* Gray scale — dark mode (inverted brightness, warm charcoal tint) */
+  --color-gray-50:  oklch(0.12 0.008 38);
+  --color-gray-100: oklch(0.17 0.010 40);
+  --color-gray-200: oklch(0.23 0.012 40);
+  --color-gray-300: oklch(0.31 0.010 42);
+  --color-gray-400: oklch(0.46 0.008 46);
+  --color-gray-500: oklch(0.57 0.008 46);
+  --color-gray-600: oklch(0.68 0.010 48);
+  --color-gray-700: oklch(0.78 0.010 50);
+  --color-gray-800: oklch(0.87 0.010 52);
+  --color-gray-900: oklch(0.94 0.010 52);
+
+  /* Semantic status — dark mode variants */
+  --color-amber-50:   oklch(0.14 0.06  80);
+  --color-amber-100:  oklch(0.20 0.10  80);
+  --color-amber-200:  oklch(0.28 0.14  80);
+  --color-amber-600:  oklch(0.78 0.18  80);
+  --color-amber-700:  oklch(0.78 0.18  80);
+
+  --color-emerald-50:  oklch(0.13 0.05 148);
+  --color-emerald-100: oklch(0.18 0.09 148);
+  --color-emerald-200: oklch(0.26 0.12 148);
+  --color-emerald-600: oklch(0.72 0.18 148);
+  --color-emerald-700: oklch(0.72 0.18 148);
+
+  --color-red-50:  oklch(0.13 0.05  25);
+  --color-red-100: oklch(0.18 0.09  25);
+  --color-red-200: oklch(0.26 0.12  25);
+  --color-red-600: oklch(0.68 0.22  25);
+
+  --color-sky-50:  oklch(0.13 0.05 220);
+  --color-sky-100: oklch(0.18 0.09 220);
+  --color-sky-200: oklch(0.26 0.12 220);
+  --color-sky-600: oklch(0.70 0.18 220);
+  --color-sky-700: oklch(0.70 0.18 220);
+
+  --color-indigo-50:  oklch(0.13 0.05 270);
+  --color-indigo-100: oklch(0.18 0.09 270);
+  --color-indigo-200: oklch(0.26 0.12 270);
+  --color-indigo-700: oklch(0.70 0.18 270);
+
+  --color-blue-50:  oklch(0.13 0.05 245);
+  --color-blue-100: oklch(0.18 0.09 245);
+
+  --color-rose-50:  oklch(0.13 0.05  10);
+  --color-rose-100: oklch(0.18 0.09  10);
+  --color-rose-200: oklch(0.26 0.12  10);
+  --color-rose-700: oklch(0.68 0.22  10);
+
+  --color-yellow-50:  oklch(0.14 0.07  90);
+  --color-yellow-100: oklch(0.20 0.11  90);
+  --color-yellow-200: oklch(0.28 0.15  90);
+  --color-yellow-700: oklch(0.80 0.18  90);
+
+  --color-blue-200: oklch(0.26 0.12 245);
+  --color-blue-600: oklch(0.68 0.18 245);
+  --color-blue-700: oklch(0.72 0.18 245);
+
+  --color-violet-50:  oklch(0.14 0.04 285);
+  --color-violet-100: oklch(0.20 0.09 285);
+  --color-violet-200: oklch(0.28 0.13 285);
+  --color-violet-700: oklch(0.70 0.20 281);
+
+  --color-cyan-50:  oklch(0.13 0.05 200);
+  --color-cyan-100: oklch(0.18 0.09 200);
+  --color-cyan-200: oklch(0.26 0.12 200);
+  --color-cyan-700: oklch(0.70 0.18 200);
+
+  --color-orange-50:  oklch(0.14 0.06  55);
+  --color-orange-100: oklch(0.20 0.10  55);
+  --color-orange-200: oklch(0.28 0.14  55);
+  --color-orange-700: oklch(0.76 0.18  55);
+
+  /* Surfaces — dark charcoal with warm orange undertone */
+  --color-surface-page:       oklch(0.10  0.012 38);
+  --color-surface-card:       oklch(0.145 0.016 40);
+  --color-surface-2:          oklch(0.17  0.016 40);
+  --color-surface-3:          oklch(0.20  0.018 40);
+  --color-surface-card-hover: oklch(0.18  0.016 40);
+  --color-surface-sidebar:    oklch(0.09  0.012 38);
+  --color-surface-overlay:    oklch(0.06  0.010 38);
+
+  /* Semantic states */
+  --color-state-success: oklch(0.72 0.18 148);
+  --color-state-warning: oklch(0.82 0.16  85);
+  --color-state-danger:  oklch(0.70 0.22  28);
+  --color-state-info:    oklch(0.68 0.20 225);
+
+  /* Text hierarchy — dark mode (cream/warm white) */
+  --color-text-main:  oklch(0.93 0.010 52);
+  --color-text-soft:  oklch(0.70 0.012 50);
+  --color-text-muted: oklch(0.46 0.008 48);
+
+  /* Violet — acento secundario */
+  --color-violet-50:  oklch(0.14 0.04 285);
+  --color-violet-100: oklch(0.20 0.08 285);
+  --color-violet-200: oklch(0.28 0.12 285);
+  --color-violet-300: oklch(0.44 0.16 283);
+  --color-violet-400: oklch(0.58 0.20 281);
+  --color-violet-500: oklch(0.65 0.24 279);
+  --color-violet-600: oklch(0.58 0.25 277);
+  --color-violet-700: oklch(0.50 0.22 276);
+  --color-violet-800: oklch(0.40 0.18 275);
+  --color-violet-900: oklch(0.28 0.13 273);
+
+  /* Animation durations */
+  --animate-fade:        fade-in        0.25s ease-out both;
+  --animate-slide:       slide-up       0.3s  ease-out both;
+  --animate-in:          pop-in         0.2s  ease-out both;
+  --animate-slide-sheet: slide-up-sheet 0.35s cubic-bezier(0.32, 0.72, 0, 1) both;
+  --animate-slide-down:  slide-down     0.2s  ease-out both;
+  --animate-shimmer:     shimmer        1.6s  ease-in-out infinite;
+}
+
+/* ─── Keyframes ──────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes slide-up-sheet {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.5; transform: scale(1.25); }
+}
+
+@keyframes success-check {
+  from { stroke-dashoffset: 50; opacity: 0; }
+  to   { stroke-dashoffset: 0;  opacity: 1; }
+}
+
+@keyframes confetti-fall {
+  0%   { transform: translateY(0) rotate(0deg);   opacity: 1; }
+  100% { transform: translateY(-60px) rotate(180deg); opacity: 0; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+/* ─── Utility classes ────────────────────────────────────── */
+@utility animate-fade {
+  animation: var(--animate-fade);
+}
+
+@utility animate-slide {
+  animation: var(--animate-slide);
+}
+
+@utility animate-in {
+  animation: var(--animate-in);
+}
+
+@utility animate-slide-sheet {
+  animation: var(--animate-slide-sheet);
+}
+
+@utility animate-slide-down {
+  animation: var(--animate-slide-down);
+}
+
+@utility animate-pulse-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+@utility animate-success-check {
+  animation: success-check 0.5s ease-out 0.15s both;
+  stroke-dasharray: 50;
+}
+
+@utility animate-shimmer {
+  animation: var(--animate-shimmer);
+  background-size: 200% auto;
+}
+
+@utility font-heading {
+  font-family: var(--font-heading);
+}
+
+@utility text-soft {
+  color: var(--color-text-soft);
+}
+
+@utility text-muted {
+  color: var(--color-text-muted);
+}
+
+@utility surface-card {
+  background: var(--color-surface-card);
+  border: 1px solid oklch(0.23 0.014 40);
+  box-shadow: 0 1px 3px oklch(0.06 0.010 38 / 0.5);
+}
+
+@utility surface-panel {
+  background: var(--color-surface-2);
+  border: 1px solid oklch(0.23 0.014 40);
+}
+
+/* Stagger delays for list animations */
+@utility stagger-1 { animation-delay: 60ms;  }
+@utility stagger-2 { animation-delay: 120ms; }
+@utility stagger-3 { animation-delay: 180ms; }
+@utility stagger-4 { animation-delay: 240ms; }
+
+/* ─── Base ───────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    touch-action: manipulation;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  input, select, textarea {
+    font-size: 16px;
+  }
+
+  body {
+    background-color: var(--color-surface-page);
+    color: var(--color-text-main);
+    @apply antialiased;
+    position: relative;
+  }
+
+  /* Aurora oscura — orbes naranja/ámbar sobre fondo charcoal */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 5% 0%,   oklch(0.55 0.20 42 / 0.14) 0%, transparent 65%),
+      radial-gradient(ellipse 60% 45% at 95% 5%,  oklch(0.50 0.18 38 / 0.08) 0%, transparent 60%),
+      radial-gradient(ellipse 65% 50% at 50% 100%, oklch(0.48 0.16 48 / 0.07) 0%, transparent 65%);
+  }
+
+  /* Focus ring — orange */
+  :focus-visible {
+    outline: 2px solid oklch(0.65 0.22 42);
+    outline-offset: 2px;
+    border-radius: 8px;
+  }
+
+  /* Custom scrollbar — dark with orange accent */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.28 0.016 40);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.40 0.020 42);
+  }
+}
+
+/* ─── Print styles ───────────────────────────────────────── */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: A4 portrait;
+  }
+
+  * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body, body::before {
+    background: white !important;
+  }
+
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  [data-print-main] {
+    margin-left: 0 !important;
+  }
+}

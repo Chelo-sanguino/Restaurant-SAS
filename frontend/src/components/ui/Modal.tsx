@@ -1,0 +1,123 @@
+import { type ReactNode, useEffect, useId } from 'react';
+import { createPortal } from 'react-dom';
+import { Icon } from './Icon';
+
+interface ModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full' | '2xl' | '3xl';
+  variant?: 'dialog' | 'drawer';
+}
+
+const sizes = {
+  sm:   'max-w-sm',
+  md:   'max-w-md',
+  lg:   'max-w-lg',
+  xl:   'max-w-xl',
+  full: 'max-w-2xl',
+  '2xl': 'max-w-3xl',
+  '3xl': 'max-w-4xl',
+};
+
+export function Modal({
+  isOpen,
+  onClose,
+  title,
+  children,
+  footer,
+  size = 'md',
+  variant = 'dialog',
+}: ModalProps) {
+  const titleId = useId();
+
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  if (variant === 'drawer') {
+    return createPortal(
+      <div className="fixed inset-0 z-50 flex items-end">
+        <div
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={title ? titleId : undefined}
+          className="relative w-full border-t border-white/8 rounded-t-2xl shadow-[0_-8px_32px_oklch(0.06_0.010_38/0.7)] z-10 animate-slide-sheet"
+          style={{ background: 'var(--color-surface-card)' }}
+        >
+          {/* Drag handle */}
+          <div className="flex justify-center pt-3 pb-1">
+            <div className="w-10 h-1 bg-white/12 rounded-full" aria-hidden="true" />
+          </div>
+          {title && (
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
+              <h2 id={titleId} className="text-base font-bold text-gray-800 font-heading">{title}</h2>
+              <button
+                onClick={onClose}
+                aria-label="Cerrar"
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/8 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                <Icon name="x" size={16} strokeWidth={2} />
+              </button>
+            </div>
+          )}
+          <div className="px-6 py-4">{children}</div>
+          {footer && (
+            <div className="px-6 pb-6 pt-2 border-t border-white/8 mt-2">{footer}</div>
+          )}
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        className={[
+          'relative rounded-2xl w-full z-10 animate-in',
+          'shadow-[0_24px_48px_oklch(0.06_0.010_38/0.8),0_4px_16px_oklch(0.06_0.010_38/0.4)]',
+          'ring-1 ring-white/6',
+          sizes[size],
+        ].join(' ')}
+        style={{ background: 'var(--color-surface-card)' }}
+      >
+        {title && (
+          <div className="flex items-center justify-between px-6 py-5 border-b border-white/8">
+            <h2 id={titleId} className="text-base font-bold text-gray-800 font-heading">{title}</h2>
+            <button
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/8 text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              <Icon name="x" size={16} strokeWidth={2} />
+            </button>
+          </div>
+        )}
+        <div className="px-6 py-5 overflow-y-auto max-h-[80vh]">{children}</div>
+        {footer && (
+          <div className="px-6 pb-6 pt-2 border-t border-white/8">{footer}</div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}

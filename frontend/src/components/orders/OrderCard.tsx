@@ -1,0 +1,349 @@
+import { useState, useEffect } from 'react';
+import { OrderStatus, PaymentMethod, UserRole } from '@pos/shared';
+import type { OrderDto } from '@pos/shared';
+import { orderTypeLabels } from '../../utils/order';
+import { elapsed, elapsedBetween, formatBoliviaTime } from '../../utils/date';
+import { Icon } from '../ui/Icon';
+import { useReceiptSettings } from '../../hooks/useReceiptSettings';
+import { useAuth } from '../../context/auth.context';
+import { printKitchenTicket, printReceipt } from '../../utils/print';
+
+/* ─── Static data ────────────────────────────────────────────────────────── */
+
+export const ACTIVE_STATUSES = new Set([OrderStatus.PENDING, OrderStatus.PREPARING]);
+
+export const STEPS = [
+  { status: OrderStatus.PENDING,   label: 'Recibido'   },
+  { status: OrderStatus.PREPARING, label: 'Preparando' },
+  { status: OrderStatus.DELIVERED, label: 'Entregado'  },
+];
+
+const stepIndex = (s: OrderStatus) => STEPS.findIndex((x) => x.status === s);
+
+export const statusAccent: Record<string, { border: string; bg: string; badge: string }> = {
+  [OrderStatus.PENDING]:   { border: 'border-l-amber-400',   bg: 'bg-amber-400/8',   badge: 'bg-amber-100 text-amber-600 border-amber-200' },
+  [OrderStatus.PREPARING]: { border: 'border-l-emerald-400', bg: 'bg-emerald-400/8', badge: 'bg-emerald-100 text-emerald-600 border-emerald-200' },
+  [OrderStatus.DELIVERED]: { border: 'border-l-sky-400',     bg: 'bg-sky-400/8',     badge: 'bg-sky-100 text-sky-600 border-sky-200' },
+  [OrderStatus.CANCELLED]: { border: 'border-l-red-400',     bg: '',                 badge: 'bg-red-100 text-red-600 border-red-200' },
+};
+
+export const statusLabel: Record<string, string> = {
+  [OrderStatus.PENDING]:   'Pendiente',
+  [OrderStatus.PREPARING]: 'Preparando',
+  [OrderStatus.DELIVERED]: 'Entregado',
+  [OrderStatus.CANCELLED]: 'Cancelado',
+};
+
+const paymentLabel: Record<string, string> = {
+  [PaymentMethod.CASH]:      'Efectivo',
+  [PaymentMethod.QR]:        'QR',
+  [PaymentMethod.TRANSFER]:  'Transferencia',
+  [PaymentMethod.CORTESIA]:  'Cortesía',
+};
+
+const actionConfig: Record<string, { label: string; nextStatus: OrderStatus; color: string } | null> = {
+  [OrderStatus.PENDING]:   { label: 'Iniciar preparación',    nextStatus: OrderStatus.PREPARING, color: 'bg-amber-500 hover:bg-amber-600 active:bg-amber-700' },
+  [OrderStatus.PREPARING]: { label: 'Marcar como entregado',  nextStatus: OrderStatus.DELIVERED, color: 'bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700' },
+  [OrderStatus.DELIVERED]: null,
+  [OrderStatus.CANCELLED]: null,
+};
+
+/* ─── Elapsed chips ──────────────────────────────────────────────────────── */
+
+function useElapsed(createdAt: string) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000);
+  return { text: elapsed(createdAt), secs };
+}
+
+function ElapsedChip({ createdAt }: { createdAt: string }) {
+  const { text, secs } = useElapsed(createdAt);
+  const urgent  = secs >= 600;
+  const warning = secs >= 300;
+  return (
+    <span className={[
+      'inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-lg border tabular-nums',
+      urgent
+        ? 'bg-red-100 text-red-600 border-red-200 animate-pulse'
+        : warning
+          ? 'bg-amber-100 text-amber-600 border-amber-200'
+          : 'bg-emerald-100 text-emerald-600 border-emerald-200',
+    ].join(' ')}>
+      <Icon name="clock" size={12} strokeWidth={2} className="shrink-0" />
+      {text}
+    </span>
+  );
+}
+
+function DeliveredAtChip({ createdAt, updatedAt }: { createdAt: string; updatedAt: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="text-xs font-medium text-gray-400 tabular-nums">
+        {formatBoliviaTime(updatedAt)}
+      </span>
+      <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-lg border tabular-nums bg-sky-50 text-sky-600 border-sky-200">
+        <Icon name="check" size={12} strokeWidth={2} className="shrink-0" />
+        {elapsedBetween(createdAt, updatedAt)}
+      </span>
+    </span>
+  );
+}
+
+/* ─── Component ──────────────────────────────────────────────────────────── */
+
+interface OrderCardProps {
+  order: OrderDto;
+  onStatusChange: (id: string, s: OrderStatus) => void;
+  onPayOrder: (order: OrderDto) => void;
+  onEdit: (order: OrderDto) => void;
+}
+
+export function OrderCard({ order, onStatusChange, onPayOrder, onEdit }: OrderCardProps) {
+  const action       = actionConfig[order.status];
+  const currentStep  = stepIndex(order.status);
+  const isCancelled  = order.status === OrderStatus.CANCELLED;
+  const isActive     = ACTIVE_STATUSES.has(order.status);
+
+  const { user }     = useAuth();
+  const [confirming, setConfirming] = useState(false);
+
+  const isOwner   = user?.role === UserRole.OWNER;
+  // Cajero: solo puede cancelar PENDING y PREPARING.
+  // Owner: puede cancelar cualquier estado no terminal, incluido DELIVERED.
+  const canCancel = !isCancelled && (isActive || (order.status === OrderStatus.DELIVERED && isOwner));
+
+  const receiptSettings = useReceiptSettings();
+
+  const handlePrintKitchen = () => printKitchenTicket(order);
+  const handlePrintReceipt = () => printReceipt(order, receiptSettings);
+
+  const accent = statusAccent[order.status] ?? { border: 'border-l-gray-200', bg: '', badge: 'bg-gray-100 text-gray-500 border-gray-200' };
+
+  return (
+    <div className={[
+      'rounded-2xl border border-white/8 shadow-[0_8px_24px_oklch(0.06_0.010_38/0.6)]',
+      'overflow-hidden border-l-4 animate-fade',
+      accent.border,
+      accent.bg,
+      isCancelled ? 'opacity-60' : '',
+    ].join(' ')}
+    style={{ background: 'var(--color-surface-card)' }}
+    >
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 pt-4 pb-3">
+        <div className="flex items-center gap-2.5">
+          <span className="font-heading font-black text-2xl text-gray-900 leading-none">
+            #{order.orderNumber}
+          </span>
+          {isActive ? (
+            <ElapsedChip createdAt={order.createdAt} />
+          ) : order.status === OrderStatus.DELIVERED ? (
+            <DeliveredAtChip createdAt={order.createdAt} updatedAt={order.updatedAt} />
+          ) : (
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <Icon name="clock" size={12} strokeWidth={2} />
+              {formatBoliviaTime(order.createdAt)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg border ${accent.badge}`}>
+            {statusLabel[order.status]}
+          </span>
+          <span className="text-xs font-semibold bg-white/8 text-gray-500 px-2.5 py-1 rounded-lg">
+            {orderTypeLabels[order.type]}
+          </span>
+        </div>
+      </div>
+
+      {/* Items */}
+      <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+        {order.items.map((item) => (
+          <span
+            key={item.id}
+            className="inline-flex items-center gap-1 text-xs bg-white/5 border border-white/10 text-gray-600 rounded-lg px-2.5 py-1"
+          >
+            <span className="font-heading font-bold text-gray-900">{item.quantity}×</span>
+            {item.productName}
+          </span>
+        ))}
+      </div>
+
+      {/* Customer */}
+      {order.customer && (
+        <div className="px-4 pb-2 -mt-1">
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg">
+            <Icon name="user" size={12} strokeWidth={2} className="shrink-0" />
+            {order.customer.name}
+          </span>
+        </div>
+      )}
+
+      {/* Notes */}
+      {order.notes && (
+        <div className="px-4 pb-3">
+          <span className="inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-1.5 rounded-xl">
+            <Icon name="chat" size={12} strokeWidth={2} className="shrink-0" />
+            {order.notes}
+          </span>
+        </div>
+      )}
+
+      {/* Progress stepper */}
+      {!isCancelled ? (
+        <div className="px-4 pb-4">
+          <div className="flex items-center gap-0">
+            {STEPS.map((step, i) => {
+              const done   = i <= currentStep;
+              const active = i === currentStep;
+              return (
+                <div key={step.status} className="flex items-center flex-1 last:flex-none">
+                  <div className="flex flex-col items-center gap-1">
+                    <div className={[
+                      'w-6 h-6 rounded-full flex items-center justify-center transition-all',
+                      done
+                        ? active
+                          ? order.status === OrderStatus.PENDING
+                            ? 'bg-amber-400 shadow-[0_0_0_3px_oklch(0.85_0.14_80/0.25)]'
+                            : order.status === OrderStatus.PREPARING
+                              ? 'bg-emerald-500 shadow-[0_0_0_3px_oklch(0.70_0.18_145/0.25)]'
+                              : 'bg-sky-500 shadow-[0_0_0_3px_oklch(0.65_0.15_220/0.25)]'
+                          : 'bg-gray-200'
+                        : 'bg-gray-100 border-2 border-gray-200',
+                    ].join(' ')}>
+                      {done && !active && (
+                        <Icon name="check" size={12} strokeWidth={3} className="text-gray-500" />
+                      )}
+                      {active && <span className="w-2 h-2 rounded-full bg-white" />}
+                    </div>
+                    <span className={`text-[10px] font-semibold whitespace-nowrap ${done ? 'text-gray-600' : 'text-gray-400'}`}>
+                      {step.label}
+                    </span>
+                  </div>
+                  {i < STEPS.length - 1 && (
+                    <div className={`flex-1 h-0.5 mb-4 mx-1 rounded-full transition-all ${
+                      i < currentStep ? 'bg-gray-300' : 'bg-gray-150'
+                    }`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="px-4 pb-4">
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-600 bg-red-50 border border-red-100 px-3 py-1.5 rounded-lg">
+            <Icon name="x" size={14} strokeWidth={2} />
+            Cancelado
+          </span>
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className={[
+        'flex items-center gap-3 px-4 py-3 border-t border-white/8 bg-white/3',
+        action ? 'flex-col sm:flex-row' : '',
+      ].join(' ')}>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="font-heading font-black text-xl text-gray-900">
+            Bs {order.total.toFixed(2)}
+          </span>
+          {order.isPaid ? (
+            <span className="text-xs font-medium text-gray-500 bg-white/8 px-2 py-0.5 rounded-md">
+              {order.payments.length > 1
+                ? order.payments.map((p) => paymentLabel[p.method] ?? p.method).join(' + ')
+                : (paymentLabel[order.payments[0]?.method] ?? '—')}
+            </span>
+          ) : (
+            <span className="text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md">
+              Pendiente de cobro
+            </span>
+          )}
+        </div>
+
+        <div className="flex gap-2 w-full sm:flex-1">
+          {!order.isPaid && !isCancelled && (
+            <button
+              onClick={() => onPayOrder(order)}
+              className="px-4 py-2.5 rounded-xl text-sm font-bold bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white transition-all active:scale-[0.97]"
+            >
+              Cobrar
+            </button>
+          )}
+          {!isCancelled && (order.status !== OrderStatus.DELIVERED || isOwner) && (
+            <button
+              onClick={() => onEdit(order)}
+              className="px-3 py-2.5 rounded-xl text-xs font-semibold text-gray-500 border border-white/10 hover:border-primary-500/40 hover:text-primary-400 hover:bg-primary-500/10 transition-colors shrink-0"
+              title="Editar pedido"
+            >
+              <Icon name="edit" size={14} strokeWidth={2} />
+            </button>
+          )}
+          {!isCancelled && (
+            <button
+              onClick={handlePrintKitchen}
+              className="px-3 py-2.5 rounded-xl text-xs font-semibold text-gray-500 border border-gray-200 hover:border-primary-500/40 hover:text-primary-400 hover:bg-primary-500/10 transition-colors shrink-0"
+              title="Imprimir comanda"
+            >
+              <Icon name="print" size={14} strokeWidth={2} />
+            </button>
+          )}
+          {order.isPaid && (
+            <button
+              onClick={handlePrintReceipt}
+              className="px-3 py-2.5 rounded-xl text-xs font-semibold text-gray-500 border border-gray-200 hover:border-sky-500/40 hover:text-sky-400 hover:bg-sky-500/10 transition-colors shrink-0"
+              title="Imprimir recibo"
+            >
+              <Icon name="document" size={14} strokeWidth={2} />
+            </button>
+          )}
+          {canCancel && (
+            confirming ? (
+              <>
+                <span className="text-xs font-semibold text-red-500 shrink-0 self-center">
+                  ¿Cancelar pedido?
+                </span>
+                <button
+                  onClick={() => {
+                    onStatusChange(order.id, OrderStatus.CANCELLED);
+                    setConfirming(false);
+                  }}
+                  className="px-3 py-2.5 text-xs font-bold text-white bg-red-500 hover:bg-red-600 active:bg-red-700 rounded-xl transition-colors shrink-0"
+                >
+                  Sí, cancelar
+                </button>
+                <button
+                  onClick={() => setConfirming(false)}
+                  className="px-3 py-2.5 text-xs font-semibold text-gray-500 border border-white/10 rounded-xl hover:border-gray-400/40 transition-colors shrink-0"
+                >
+                  No
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirming(true)}
+                className="px-3 py-2.5 text-xs font-semibold text-gray-500 border border-white/10
+                  rounded-xl hover:border-red-500/40 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+              >
+                Cancelar
+              </button>
+            )
+          )}
+          {action && (
+            <button
+              onClick={() => onStatusChange(order.id, action.nextStatus)}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition-all active:scale-[0.97] ${action.color}`}
+            >
+              {action.label}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,159 @@
+version: '3.8'
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16.6-alpine
+    container_name: pos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+      TZ:                America/La_Paz
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [pos-network]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.50'
+        reservations:
+          memory: 128m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── NestJS Backend ──────────────────────────────────────────────────────────
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY}/pos-backend:${IMAGE_TAG:-latest}
+    container_name: pos-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL:   postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JWT_SECRET:     ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-24h}
+      PORT:           3000
+      FRONTEND_URL:   ${FRONTEND_URL}
+      NODE_ENV:       production
+      ADMIN_SECRET:   ${ADMIN_SECRET}
+      TZ:             America/La_Paz
+    volumes:
+      - uploads_data:/app/backend/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [pos-network]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.00'
+        reservations:
+          memory: 128m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ── nginx + React Frontend ──────────────────────────────────────────────────
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY}/pos-frontend:${IMAGE_TAG:-latest}
+    container_name: pos-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [pos-network]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: '0.25'
+        reservations:
+          memory: 32m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: pos-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml #scrape config
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [pos-network]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.50'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── PostgreSQL Exporter ────────────────────────────────────────────────────
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: pos-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [pos-network]
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: '0.10'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  postgres_data:
+  uploads_data:
+  prometheus_data:
+
+networks:
+  pos-network:
+    driver: bridge

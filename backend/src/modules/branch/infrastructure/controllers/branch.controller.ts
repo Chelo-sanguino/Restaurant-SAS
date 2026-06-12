@@ -1,0 +1,68 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { UserRole } from '@pos/shared';
+import { JwtAuthGuard } from '../../../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../../../common/guards/roles.guard';
+import { ModuleGuard } from '../../../../common/guards/module.guard';
+import { Roles } from '../../../../common/decorators/roles.decorator';
+import { RequiresModule } from '../../../../common/decorators/module-flags.decorator';
+import { CurrentTenant } from '../../../../common/decorators/tenant.decorator';
+import { CreateBranchDto } from '../../application/dto/create-branch.dto';
+import { UpdateBranchDto } from '../../application/dto/update-branch.dto';
+import { CreateBranchUseCase } from '../../application/use-cases/create-branch.use-case';
+import { ListBranchesUseCase } from '../../application/use-cases/list-branches.use-case';
+import { UpdateBranchUseCase } from '../../application/use-cases/update-branch.use-case';
+import { ToggleBranchUseCase } from '../../application/use-cases/toggle-branch.use-case';
+
+@Controller('branches')
+@UseGuards(JwtAuthGuard, ModuleGuard, RolesGuard)
+export class BranchController {
+  constructor(
+    private readonly createBranchUseCase: CreateBranchUseCase,
+    private readonly listBranchesUseCase: ListBranchesUseCase,
+    private readonly updateBranchUseCase: UpdateBranchUseCase,
+    private readonly toggleBranchUseCase: ToggleBranchUseCase,
+  ) {}
+
+  @Get()
+  @Roles(UserRole.OWNER, UserRole.CASHIER)
+  findAll(@CurrentTenant() tenantId: string) {
+    return this.listBranchesUseCase.execute(tenantId);
+  }
+
+  @Post()
+  @RequiresModule('branchesEnabled')
+  @Roles(UserRole.OWNER)
+  create(@CurrentTenant() tenantId: string, @Body() dto: CreateBranchDto) {
+    return this.createBranchUseCase.execute(tenantId, dto);
+  }
+
+  @Patch(':id')
+  @RequiresModule('branchesEnabled')
+  @Roles(UserRole.OWNER)
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentTenant() tenantId: string,
+    @Body() dto: UpdateBranchDto,
+  ) {
+    return this.updateBranchUseCase.execute(id, tenantId, dto);
+  }
+
+  @Patch(':id/toggle')
+  @RequiresModule('branchesEnabled')
+  @Roles(UserRole.OWNER)
+  toggle(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentTenant() tenantId: string,
+  ) {
+    return this.toggleBranchUseCase.execute(id, tenantId);
+  }
+}

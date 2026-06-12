@@ -1,0 +1,264 @@
+import { useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { CashSessionStatus } from '@pos/shared';
+import { cashSessionApi } from '../api/cash-session.api';
+import { useAuth } from '../context/auth.context';
+import { useSettingsStore } from '../store/settings.store';
+import { Button } from '../components/ui/Button';
+import { Spinner } from '../components/ui/Spinner';
+import { PageShell } from '../components/ui/PageShell';
+import { useCashSession } from '../hooks/useCashSession';
+import { formatDate } from '../utils/date';
+import { handleApiError } from '../utils/api-error';
+import { Icon } from '../components/ui/Icon';
+import { CashAmountModal } from '../components/cash/CashAmountModal';
+import { HistoryModal } from '../components/cash/HistoryModal';
+
+function diffColor(diff: number | null) {
+  if (diff === null) return 'text-gray-500';
+  if (diff > 0) return 'text-emerald-600';
+  if (diff < 0) return 'text-red-500';
+  return 'text-gray-700';
+}
+
+interface StatRowProps {
+  label: string;
+  value: string;
+  muted?: boolean;
+  bold?: boolean;
+  bordered?: boolean;
+  valueClass?: string;
+}
+
+function StatRow({ label, value, muted, bold, bordered, valueClass }: StatRowProps) {
+  return (
+    <div className={`flex justify-between items-center py-3 ${bordered ? 'border-t border-white/8' : ''}`}>
+      <span className={`text-sm ${muted ? 'text-gray-400' : 'text-gray-600'}`}>{label}</span>
+      <span className={`text-sm ${bold ? 'font-heading font-bold' : 'font-medium'} ${valueClass || 'text-gray-900'}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+export function CashPage() {
+  const { cashEnabled } = useSettingsStore();
+  if (!cashEnabled) return <Navigate to="/pos" replace />;
+
+  const { currentBranchId, user } = useAuth();
+  const isOwner = user?.role === 'OWNER';
+  const { session, history, loading, reload } = useCashSession(currentBranchId);
+  const [showOpen, setShowOpen] = useState(false);
+  const [showClose, setShowClose] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  if (!currentBranchId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-gray-400 px-6">
+        <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
+          <Icon name="building" size={28} strokeWidth={1.5} className="text-gray-300" />
+        </div>
+        <p className="text-sm font-semibold text-gray-500 text-center">Selecciona una sucursal</p>
+        <p className="text-xs mt-1 text-center">para ver el estado de caja</p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return <div className="flex justify-center py-12"><Spinner /></div>;
+  }
+
+  const isOpen = session?.status === CashSessionStatus.OPEN;
+  const closedSessions = history.filter((s) => s.status === CashSessionStatus.CLOSED);
+  const lastClosed = closedSessions[0] ?? null;
+
+  const handleOpen = async (amount: number, notes?: string) => {
+    try {
+      await cashSessionApi.open({ openingAmount: amount, notes }, currentBranchId);
+      toast.success('Caja abierta');
+      setShowOpen(false);
+      reload();
+    } catch (err) {
+      handleApiError(err, 'Error al abrir caja');
+    }
+  };
+
+  const handleClose = async (amount: number, notes?: string) => {
+    try {
+      await cashSessionApi.close({ closingAmount: amount, notes }, currentBranchId);
+      toast.success('Caja cerrada');
+      setShowClose(false);
+      reload();
+    } catch (err) {
+      handleApiError(err, 'Error al cerrar caja');
+    }
+  };
+
+  return (
+    <PageShell maxWidth="2xl">
+      <div className="rounded-2xl border border-white/8 shadow-[0_10px_30px_oklch(0.06_0.010_38/0.6)] p-4 sm:p-5 mb-4" style={{ background: 'var(--color-surface-card)' }}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-xl font-black text-gray-900">Control de Caja</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Apertura, cierre y conciliación del turno actual.</p>
+          </div>
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+            isOpen
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-gray-100 text-gray-600 border-gray-200'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isOpen ? 'bg-emerald-500 animate-pulse-dot' : 'bg-gray-400'}`} />
+            {isOpen ? 'Turno abierto' : 'Turno cerrado'}
+          </span>
+        </div>
+      </div>
+
+      {/* Hero status card */}
+      <div className={[
+        'rounded-2xl p-6 mb-4 border shadow-[0_8px_26px_oklch(0.13_0.012_260/0.08)]',
+        isOpen
+          ? 'bg-gradient-to-br from-emerald-50 to-emerald-100/60 border-emerald-200/80'
+          : 'bg-gradient-to-br from-gray-50 to-gray-100/60 border-gray-200/80',
+      ].join(' ')}>
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`w-2.5 h-2.5 rounded-full ${isOpen ? 'bg-emerald-500 animate-pulse-dot' : 'bg-gray-300'}`} />
+              <span className={`text-sm font-bold ${isOpen ? 'text-emerald-700' : 'text-gray-500'}`}>
+                {isOpen ? 'Caja abierta' : 'Caja cerrada'}
+              </span>
+            </div>
+            {isOpen && session && (
+              <p className="text-xs text-emerald-600/70 ml-4">Desde {formatDate(session.openedAt)}</p>
+            )}
+          </div>
+          <div className={[
+            'w-12 h-12 rounded-xl flex items-center justify-center',
+            isOpen ? 'bg-emerald-500/15' : 'bg-gray-200/60',
+          ].join(' ')}>
+            <Icon name="cash" size={24} className={isOpen ? 'text-emerald-600' : 'text-gray-400'} />
+          </div>
+        </div>
+
+        {isOpen && session ? (
+          <>
+            <div className="mb-5">
+              <p className="text-xs font-semibold text-emerald-600/70 uppercase tracking-wide mb-1">Monto inicial</p>
+              <p className="font-heading font-black text-3xl text-emerald-700">Bs {session.openingAmount.toFixed(2)}</p>
+            </div>
+            {session.notes && (
+              <p className="text-xs text-emerald-600/60 bg-emerald-500/8 rounded-lg px-3 py-2 mb-4">{session.notes}</p>
+            )}
+            {isOwner ? (
+              <Button variant="secondary" fullWidth onClick={() => setShowClose(true)}>
+                Cerrar caja
+              </Button>
+            ) : (
+              <p className="text-sm text-emerald-600/70 text-center bg-emerald-500/8 rounded-xl px-3 py-2.5">
+                El administrador es quien cierra el turno.
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-gray-500 mb-5 leading-relaxed">
+              Abre la caja al inicio del turno para registrar el monto inicial de efectivo.
+            </p>
+            {isOwner ? (
+              <Button size="lg" fullWidth onClick={() => setShowOpen(true)}>
+                Abrir caja
+              </Button>
+            ) : (
+              <p className="text-sm text-gray-400 text-center bg-gray-100 rounded-xl px-3 py-2.5">
+                El administrador abre el turno al inicio del día.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Last closing summary */}
+      {!isOpen && lastClosed && (
+        <div className="rounded-2xl border border-white/8 shadow-[0_8px_24px_oklch(0.06_0.010_38/0.4)] p-5" style={{ background: 'var(--color-surface-card)' }}>
+          <div className="flex items-center gap-2 mb-4">
+            <Icon name="orders" size={16} strokeWidth={2} className="text-gray-400 shrink-0" />
+            <h3 className="text-sm font-bold text-gray-700">Último cierre</h3>
+            {lastClosed.closedAt && (
+              <span className="ml-auto text-xs text-gray-400">{formatDate(lastClosed.closedAt)}</span>
+            )}
+          </div>
+
+          <div className="divide-y divide-white/8">
+            <StatRow label="Monto inicial" value={`Bs ${lastClosed.openingAmount.toFixed(2)}`} />
+            <StatRow
+              label="Ventas en efectivo"
+              value={`Bs ${((lastClosed.expectedAmount ?? 0) - lastClosed.openingAmount).toFixed(2)}`}
+            />
+            <StatRow
+              label="Esperado en caja"
+              value={`Bs ${(lastClosed.expectedAmount ?? 0).toFixed(2)}`}
+              bold
+            />
+            <StatRow
+              label="Contado al cierre"
+              value={`Bs ${(lastClosed.closingAmount ?? 0).toFixed(2)}`}
+              bold
+              bordered
+            />
+            <StatRow
+              label="Diferencia"
+              value={lastClosed.difference !== null
+                ? `${lastClosed.difference >= 0 ? '+' : ''}Bs ${lastClosed.difference.toFixed(2)}`
+                : '—'}
+              bold
+              valueClass={diffColor(lastClosed.difference)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* History link */}
+      {closedSessions.length > 0 && (
+        <button
+          onClick={() => setShowHistory(true)}
+          className="w-full mt-3 text-xs text-primary-600 hover:text-primary-700 font-semibold transition-colors
+            bg-white/5 border border-white/10 rounded-xl py-3 hover:border-primary-500/40 hover:bg-primary-500/8 shadow-[0_6px_18px_oklch(0.06_0.010_38/0.4)]"
+        >
+          Ver historial de cierres ({closedSessions.length}) →
+        </button>
+      )}
+
+      <CashAmountModal
+        isOpen={showOpen}
+        onClose={() => setShowOpen(false)}
+        onConfirm={handleOpen}
+        title="Abrir caja"
+        amountLabel="Monto inicial en efectivo"
+        confirmLabel="Abrir caja"
+      />
+
+      <CashAmountModal
+        isOpen={showClose}
+        onClose={() => setShowClose(false)}
+        onConfirm={handleClose}
+        title="Cerrar caja"
+        subtitle={session ? `Abierta el ${formatDate(session.openedAt)}` : undefined}
+        amountLabel="Efectivo contado al cierre"
+        confirmLabel="Cerrar caja"
+        defaultAmount={session ? session.openingAmount + (session.cashSales ?? 0) : undefined}
+        breakdown={session ? {
+          openingAmount: session.openingAmount,
+          cashSales: session.cashSales ?? 0,
+          expectedAmount: session.openingAmount + (session.cashSales ?? 0),
+        } : undefined}
+      />
+
+      <HistoryModal
+        isOpen={showHistory}
+        sessions={closedSessions}
+        onClose={() => setShowHistory(false)}
+      />
+    </PageShell>
+  );
+}

@@ -1,0 +1,135 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import type { OrderNumberResetPeriod, SaasPlan, PlanLimits } from '@pos/shared';
+
+/** Shape of the server payload written to the store after login / getMe. */
+export interface ServerConfig {
+  ordersEnabled?:          boolean;
+  cashEnabled?:            boolean;
+  teamEnabled?:            boolean;
+  branchesEnabled?:        boolean;
+  kitchenEnabled?:         boolean;
+  rafflesEnabled?:         boolean;
+  orderNumberResetPeriod?: OrderNumberResetPeriod;
+  tenantLogo?:             string | null;
+  businessAddress?:        string;
+  businessPhone?:          string;
+  receiptSlogan?:          string;
+  plan?:                   SaasPlan;
+  planLimits?:             PlanLimits;
+}
+
+interface SettingsState {
+  // Impresión
+  autoPrintKitchen: boolean;
+  setAutoPrintKitchen: (value: boolean) => void;
+
+  // Panel de cocina (server-controlled — set by auth context on login/getMe)
+  kitchenEnabled: boolean;
+  setKitchenEnabled: (value: boolean) => void;
+
+  // Módulos opcionales (server-controlled — set by auth context on login/getMe)
+  ordersEnabled: boolean;
+  cashEnabled: boolean;
+  teamEnabled: boolean;
+  branchesEnabled: boolean;
+  rafflesEnabled: boolean;
+  setOrdersEnabled: (value: boolean) => void;
+  setCashEnabled: (value: boolean) => void;
+  setTeamEnabled: (value: boolean) => void;
+  setBranchesEnabled: (value: boolean) => void;
+  setRafflesEnabled: (value: boolean) => void;
+
+  // Numeración de pedidos (server-controlled — set by auth context on login/getMe)
+  orderNumberResetPeriod: OrderNumberResetPeriod;
+  setOrderNumberResetPeriod: (value: OrderNumberResetPeriod) => void;
+
+  // Datos del negocio (server-controlled — set by auth context on login/getMe)
+  businessAddress: string;
+  businessPhone: string;
+  receiptSlogan: string;
+  setBusinessAddress: (value: string) => void;
+  setBusinessPhone: (value: string) => void;
+  setReceiptSlogan: (value: string) => void;
+
+  // Logo del negocio (server-controlled — set by auth context on login/getMe)
+  tenantLogo: string | null;
+  setTenantLogo: (value: string | null) => void;
+
+  // Plan SaaS (server-controlled — set by auth context on login/getMe)
+  plan: SaasPlan;
+  setPlan: (value: SaasPlan) => void;
+  planLimits: PlanLimits;
+  setPlanLimits: (value: PlanLimits) => void;
+
+  // Bulk update — single call instead of 12 individual setters.
+  // auth.context calls this after every login / getMe.
+  applyServerConfig: (config: ServerConfig) => void;
+}
+
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set) => ({
+      // Runtime defaults — overwritten by server values on every login/getMe
+      autoPrintKitchen: true,
+      setAutoPrintKitchen: (value) => set({ autoPrintKitchen: value }),
+
+      kitchenEnabled: false,
+      setKitchenEnabled: (value) => set({ kitchenEnabled: value }),
+
+      ordersEnabled: true,
+      cashEnabled: true,
+      teamEnabled: true,
+      branchesEnabled: true,
+      rafflesEnabled: false,
+      setOrdersEnabled: (value) => set({ ordersEnabled: value }),
+      setCashEnabled: (value) => set({ cashEnabled: value }),
+      setTeamEnabled: (value) => set({ teamEnabled: value }),
+      setBranchesEnabled: (value) => set({ branchesEnabled: value }),
+      setRafflesEnabled: (value) => set({ rafflesEnabled: value }),
+
+      orderNumberResetPeriod: 'DAILY' as OrderNumberResetPeriod,
+      setOrderNumberResetPeriod: (value) => set({ orderNumberResetPeriod: value }),
+
+      businessAddress: '',
+      businessPhone: '',
+      receiptSlogan: '',
+      setBusinessAddress: (value) => set({ businessAddress: value }),
+      setBusinessPhone:   (value) => set({ businessPhone: value }),
+      setReceiptSlogan:   (value) => set({ receiptSlogan: value }),
+
+      tenantLogo: null,
+      setTenantLogo: (value) => set({ tenantLogo: value }),
+
+      plan: 'BASICO' as SaasPlan,
+      setPlan: (value) => set({ plan: value }),
+      planLimits: { maxBranches: 1, maxCashiers: 2, maxProducts: 80, kitchenEnabled: false } as PlanLimits,
+      setPlanLimits: (value) => set({ planLimits: value }),
+
+      applyServerConfig: (config) => set((state) => ({
+        ordersEnabled:          config.ordersEnabled          ?? state.ordersEnabled,
+        cashEnabled:            config.cashEnabled            ?? state.cashEnabled,
+        teamEnabled:            config.teamEnabled            ?? state.teamEnabled,
+        branchesEnabled:        config.branchesEnabled        ?? state.branchesEnabled,
+        kitchenEnabled:         config.kitchenEnabled         ?? state.kitchenEnabled,
+        rafflesEnabled:         config.rafflesEnabled         ?? state.rafflesEnabled,
+        orderNumberResetPeriod: config.orderNumberResetPeriod ?? state.orderNumberResetPeriod,
+        // tenantLogo can be null (valid) vs undefined (not provided)
+        tenantLogo:             config.tenantLogo !== undefined ? config.tenantLogo : state.tenantLogo,
+        businessAddress:        config.businessAddress        ?? state.businessAddress,
+        businessPhone:          config.businessPhone          ?? state.businessPhone,
+        receiptSlogan:          config.receiptSlogan          ?? state.receiptSlogan,
+        plan:                   config.plan                   ?? state.plan,
+        planLimits:             config.planLimits             ?? state.planLimits,
+      })),
+    }),
+    {
+      name: 'pos-settings',
+      // Only persist local UI preferences.
+      // Module flags, businessAddress/Phone/receiptSlogan come from the server on every login/getMe — never from localStorage.
+      partialize: (state) => ({
+        autoPrintKitchen: state.autoPrintKitchen,
+      }),
+    },
+  ),
+);

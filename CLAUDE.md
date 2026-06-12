@@ -1,0 +1,350 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Stack
+
+**Monorepo** managed with pnpm workspaces (`pnpm-workspace.yaml`). Three packages:
+- `backend/` — NestJS 11 + Prisma 6 + PostgreSQL
+- `frontend/` — React 19 + Vite 5 + Tailwind CSS 4
+- `packages/shared/` — TypeScript types shared between front and back (`@pos/shared`)
+
+**Key versions:** TypeScript 5.6, React Router 6, Zustand 5, TanStack Query 5, Socket.IO 4, JWT via `@nestjs/jwt` + `passport-jwt`.
+
+## Prerequisites
+
+- Node.js ≥ 18, pnpm ≥ 8, Docker Desktop
+
+## First-Time Setup
+
+```bash
+pnpm install
+docker-compose up -d
+pnpm --filter backend prisma:migrate
+pnpm --filter backend prisma:generate
+pnpm --filter backend seed
+pnpm dev
+```
+
+**Demo credentials** (after seed): `owner@demo.com / demo123` (OWNER), `cajero@demo.com / demo123` (CASHIER). Business: "Restaurante Demo" (plan PRO), branch: Principal.
+
+> **WARNING:** Never run `seed` in production. It creates a demo tenant with well-known credentials.
+
+## Development Commands
+
+```bash
+# Start PostgreSQL (required before running backend)
+docker-compose up -d
+
+# Run both frontend and backend concurrently
+pnpm dev
+
+# Run individually
+pnpm dev:backend    # NestJS on :3000
+pnpm dev:frontend   # Vite on :5173
+
+# Seed the database with demo data (tenant, owner, cashier, branches, products)
+pnpm --filter backend seed
+
+# Seed raffle test data (~600 tickets, SPENDING_THRESHOLD mode, dev only)
+pnpm --filter backend seed:raffle
+
+# Type-check
+pnpm --filter @pos/shared build          # MUST run first after editing shared types
+pnpm --filter backend typecheck
+pnpm --filter frontend typecheck
+
+# Lint (backend only; zero-warning policy)
+pnpm --filter backend lint
+
+# Tests
+pnpm test:backend                        # Jest unit tests
+pnpm test:frontend                       # Vitest unit tests
+pnpm test:e2e                            # Playwright E2E tests (requires pnpm dev running)
+
+# Run a single backend test file
+pnpm --filter backend test -- --testPathPattern="create-order"
+
+# Run a single frontend test file
+pnpm --filter frontend test:run -- src/store/cart.store.spec.ts
+
+# Watch / coverage (backend)
+pnpm --filter backend test:watch
+pnpm --filter backend test:coverage
+
+# Coverage (frontend)
+pnpm --filter frontend test:coverage
+
+# Prisma commands (run from repo root — pnpm filter sets the right cwd)
+pnpm --filter backend prisma:generate        # Regenerate client after schema changes
+pnpm --filter backend prisma:migrate         # Create + apply migration (dev)
+pnpm --filter backend prisma:migrate:deploy  # Apply pending migrations (production)
+pnpm --filter backend prisma:migrate:status  # Check migration status
+pnpm --filter backend prisma:studio          # Visual DB browser on :5555
+
+# Build
+pnpm build
+```
+
+The Vite dev server proxies `/api`, `/uploads`, and `/socket.io` to `localhost:3000`.
+
+**PostgreSQL connection** (docker-compose): host `localhost:5433`, db `pos_db`, user `pos_user`, password `pos_password`.
+
+## Known Windows Gotchas
+
+- **`prisma migrate dev` advisory lock timeout**: On Windows the migrate command can time out waiting for a DB lock. Workaround: apply the SQL manually via `docker exec pos-postgres psql -U pos_user -d pos_db -c "..."`, then register it with `npx prisma migrate resolve --applied <migration_name>` (run from `backend/`).
+- **`prisma generate` EPERM**: The Prisma binary is locked while the backend is running. Stop `pnpm dev:backend` first, generate, then restart.
+- **pnpm strict hoisting**: Installing a new package can rewrite `backend/package.json`'s `onlyBuiltDependencies` array, removing Prisma entries. After `pnpm add`, always check that `@prisma/engines`, `@prisma/client`, and `prisma` are still listed there; revert with `git checkout -- backend/package.json` if needed.
+
+## Key Conventions
+
+- Keep changes small and scoped to the requested module — avoid unsolicited global refactors.
+- All TypeScript; `any` is an ESLint error — avoid it. `_` prefix silences the unused-vars rule for intentionally unused params.
+- Validate changes with `typecheck` (and manual flow testing for affected screens) — the automated test suite is not comprehensive.
+- Error messages thrown by use cases are in **Spanish** (they surface directly to the UI via `HttpExceptionFilter`).
+
+## Backend Architecture
+
+### Hexagonal (ports & adapters) per module
+
+Every NestJS module under `backend/src/modules/` follows this layout:
+```
+domain/
+  entities/      ← pure TS classes (no ORM decorators), e.g. Order.create()
+  ports/         ← repository interfaces
+application/
+  use-cases/     ← one class per operation, injected via DI
+  dto/           ← class-validator DTOs
+infrastructure/
+  controllers/   ← NestJS @Controller, calls use-cases
+  persistence/   ← Repository impl (PrismaService, maps rows ↔ domain)
+```
+
+Repositories are registered with a **constant token** (e.g. `RAFFLE_REPOSITORY_PORT` exported from the port file) and injected with `@Inject(RAFFLE_REPOSITORY_PORT)` — never with the class directly. Older modules use a plain string token (e.g. `'OrderRepositoryPort'`); both patterns are valid, but prefer the constant form for new modules.
+
+### Unit tests
+
+Backend specs live next to the file under test (`*.use-case.spec.ts`, `*.entity.spec.ts`). Use `jest-mock-extended` (`mock<PortInterface>()`) to create repository mocks. Test the use-case class in isolation — never spin up NestJS or Prisma in unit tests.
+
+### Multi-tenancy
+
+Shared database / shared schema. Every table has `tenant_id`. The JWT payload carries `{ sub, tenantId, branchId, role }`. Use `@CurrentTenant()` to extract `tenantId` in controllers; repositories always filter by it.
+
+`@CurrentUser()` returns the full `JwtPayload` (defined in `common/decorators/tenant.decorator.ts`).
+
+`CASHIER` users have `branchId` baked into their JWT; `OWNER` users have `branchId: null` and pass it in the request body/query.
+
+### Authorization
+
+Four guards in `backend/src/common/guards/`:
+
+- `JwtAuthGuard` — verifies JWT, required on almost all endpoints
+- `RolesGuard` + `@Roles(UserRole.OWNER)` — restricts endpoints to owners
+- `ModuleGuard` + `@RequiresModule('rafflesEnabled')` — checks the tenant's module flag; returns 403 if disabled
+- `AdminGuard` — checks `x-admin-key` header against `ADMIN_SECRET`; no JWT; used only on `/admin/*`
+
+### Real-time (WebSockets)
+
+`EventsModule` exports `EventsService`. Use cases call `eventsService.emitToTenant(tenantId, event, payload)`.
+
+**Always use the `SOCKET_EVENTS` constant from `@pos/shared`** — never raw string literals — to avoid typos between emitters and subscribers. Full event list in `packages/shared/src/socket-events.ts`: orders (`order.created`, `order.updated`), cash sessions (`cash.opened`, `cash.closed`), catalog (`product.created/updated`, `category.created/updated/deleted`), customers (`customer.created/updated`), expenses (`expense.created/updated/deleted`), raffles (`raffle.created/updated/deleted`, `raffle.ticket_added`), tenant settings (`tenant.modules.updated`).
+
+The gateway joins sockets to `tenant:{tenantId}` and `t:{tenantId}:b:{branchId}` rooms.
+
+### Modules overview
+
+| Module | Key endpoints | Notes |
+|--------|--------------|-------|
+| `auth` | `POST /auth/login`, `GET /auth/me`, `POST /auth/users`, `PATCH /auth/me/password` | Cashier management; JWT. Password change requires `x-admin-key` header. |
+| `tenant` | `PATCH /tenants/settings` | Owner-only; `orderNumberResetPeriod` (DAILY/MONTHLY) |
+| `branch` | `GET/POST /branches`, `PATCH /branches/:id` | |
+| `catalog` | `GET/POST /categories`, `GET/POST /products` | Pagination via `X-Total-Count` header |
+| `orders` | `POST /orders`, `GET /orders`, `GET /orders/:id`, `PATCH /orders/:id/status`, `POST /orders/:id/payments` | Split payments; price snapshot. `:id/payments` registers deferred payment. |
+| `cash-session` | `POST /cash-sessions/open`, `POST /cash-sessions/close` | Per-branch; cash-only flow |
+| `reports` | `GET /reports/daily`, `GET /reports/range`, `GET /reports/top-products`, `GET /reports/top-customers`, `GET /reports/daily-series`, `GET /reports/by-cashier`, `GET /reports/top-categories`, `GET /reports/by-hour`, `GET /reports/by-day-hour`, `GET /reports/cash-sessions` | Raw SQL aggregation; all OWNER only |
+| `upload` | `POST /uploads/image` | multer; 2 MB; JPG/PNG/WEBP/GIF; served at `/uploads/<file>` |
+| `expenses` | `GET/POST /expenses/categories`, `DELETE /expenses/categories/:id`, `POST/GET/PATCH/DELETE /expenses`, `GET /expenses/summary` | OWNER only; `cashSessionId` nullable (expense recorded even without open session); `ExpenseCategory` is a per-tenant DB model (name, icon, isActive, trackQuantity, sortOrder); each expense has optional `items[]` (ExpenseItem) |
+| `customers` | `GET/POST /customers`, `GET /customers/search` | Order history; ticket/raffle tracking |
+| `raffles` | `GET/POST /raffles`, `GET /raffles/:id`, `PATCH /raffles/:id`, `PATCH /raffles/:id/close`, `PATCH /raffles/:id/reopen`, `DELETE /raffles/:id`, `POST /raffles/:id/draw`, `PATCH /raffles/:id/winners/:winnerId/void`, `PATCH /raffles/:id/tickets/deliver`, `PATCH /raffles/:id/tickets/undeliver` | OWNER only; requires `rafflesEnabled` module flag; status lifecycle: ACTIVE→CLOSED→DRAWING→DRAWN. Two ticket modes: `PRODUCT_MATCH` (buying a product = ticket) and `SPENDING_THRESHOLD` (every N Bs spent = ticket, tracked in `CustomerRaffleSpending`). `GET /raffles/:id` returns `RaffleDetailDto` (includes `tickets[]` + `spendings[]`). `RaffleAutoTicketService` creates tickets automatically when new orders are created/completed. Ticket delivery (`deliver`/`undeliver`) marks physical tickets as handed out. |
+| `admin` | `GET/POST /admin/tenants`, `PATCH /admin/tenants/:id/toggle`, `PATCH /admin/tenants/:id/plan`, `PATCH /admin/tenants/:id/modules`, `GET/PATCH /admin/plans` | `AdminGuard`; no JWT. `/modules` sets per-tenant feature flags (`ordersEnabled`, `cashEnabled`, `rafflesEnabled`, etc.) |
+| `plans` | `GET /plans` | No auth; returns all `Plan` rows. `PlanLimitService` is injected by other modules to enforce `maxBranches`, `maxCashiers`, `maxProducts` limits. |
+| `events` | WebSocket gateway | Socket.IO rooms per tenant/branch |
+
+### Global app configuration
+
+- **API prefix**: all routes are under `/api/v1` (set via `setGlobalPrefix` in `main.ts`). Health check `GET /health` runs before the prefix.
+- **ValidationPipe**: `whitelist: true, forbidNonWhitelisted: true, transform: true` — strips unknown fields, rejects requests with extra properties, and auto-transforms primitives.
+- **Error responses**: `HttpExceptionFilter` in `common/filters/` normalizes all HTTP errors to `{ statusCode, message, error, timestamp }`. Use case errors are thrown as NestJS `BadRequestException` / `ForbiddenException` with Spanish messages.
+- **CORS**: in development allows all origins; in production requires `FRONTEND_URL` to be set.
+
+### Rate Limiting
+
+Global 100 req/min via `ThrottlerModule` (`app.module.ts`). Login has a stricter `@Throttle`.
+
+## Frontend Architecture
+
+Layered (not hexagonal):
+```
+api/         ← Axios functions per resource (no state)
+hooks/       ← custom hooks: fetch + state (useProducts, useOrders, …)
+store/       ← Zustand stores: cart.store.ts, settings.store.ts, cashSession.store.ts
+context/     ← auth.context.tsx (user/token/branchId), socket.context.tsx
+pages/       ← route-level components
+components/  ← ui/, layout/, pos/, orders/, products/, cash/, expenses/, raffles/, admin/
+utils/       ← date.ts (today, formatDate, elapsed), api-error.ts, print.ts, order.ts, excel.ts, csv.ts, raffle-sounds.ts, raffle-certificate.ts
+routes/      ← PrivateRoute, OwnerRoute
+```
+
+### Route structure
+
+```
+/           ← LandingPage (public)
+/login      ← public
+/admin      ← public (x-admin-key only)
+/kitchen    ← auth, fullscreen (no sidebar)
+/* AppLayout:
+  /pos       /orders    /cash      ← CASHIER + OWNER
+  /account                         ← CASHIER + OWNER (password change)
+  /report    /expenses  /customers
+  /products  /team      /branches  ← OWNER only
+  /raffles   /settings
+```
+
+`/orders`, `/cash`, `/kitchen`, `/team`, `/branches`, `/raffles` are gated by `ModuleRoute` (implemented inline in `App.tsx`) — when the corresponding module flag is disabled by the admin, direct URL access redirects to `/pos`.
+
+Unknown routes redirect to `/`. No public self-registration.
+
+### State architecture
+
+- **`cart.store.ts`** (Zustand + persist): cart items, order type, notes. Cleared after a successful order.
+- **`settings.store.ts`** (Zustand + persist with `partialize`): UI toggles (`autoPrintKitchen`, `cashEnabled`, module flags). Server-controlled flags (`kitchenEnabled`, `orderNumberResetPeriod`) are **not** persisted to localStorage — they are set via `applyModules()` in `auth.context.tsx` on every login/me call.
+- **`cashSession.store.ts`**: current open session; `isOpen()` checks branch match.
+
+### Auth & branch selection
+
+`useAuth()` exposes `{ user, token, currentBranchId, login, logout }`. When an OWNER logs in, `currentBranchId` is `null` until they select a branch from the Sidebar. If there is only one branch, it is auto-selected. `currentBranchId` is stored in `localStorage` (`pos_branch` key) via `auth.context.tsx`, so it persists across tabs and sessions. It is cleared on logout.
+
+The Axios client (`frontend/src/api/client.ts`) reads the JWT from `localStorage` key `pos_token` and sets it as `Authorization: Bearer …` on every request. A 401 response auto-redirects to `/login` and clears the token.
+
+### React Query
+
+All server-state fetching in hooks uses TanStack Query (`@tanstack/react-query`). The `QueryClient` is in `frontend/src/lib/query-client.ts` with these global defaults:
+
+- `staleTime: 30_000` — data is fresh for 30 s after a fetch
+- `refetchOnWindowFocus: false` — disabled because WebSocket events keep data current; tab switches would cause redundant requests
+- `retry: 1` — one automatic retry on failure
+
+**Adaptive polling strategy:** hooks that drive real-time views (orders, kitchen, cash session) poll only when the socket is disconnected, then stop polling and invalidate their cache on reconnect. This means the socket is the primary freshness mechanism; polling is only a fallback.
+
+Query keys are centralised in `frontend/src/lib/query-keys.ts`. Use the exported factory functions from there when calling `queryClient.invalidateQueries` — never inline raw key arrays.
+
+### Socket context
+
+`useSocket()` exposes `{ socket, connected, reconnecting, status }` where `status: ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected'`.
+
+`useSocketEvent<T>(event, handler)` subscribes a component to a Socket.IO event. Subscriptions are cleaned up on unmount. The socket connects with `auth: { token }` from JWT and attempts up to 5 reconnections (2 s delay).
+
+### Error handling (frontend)
+
+`handleApiError(err, fallback?)` in `frontend/src/utils/api-error.ts` extracts a user-friendly string from an Axios error response and calls `toast.error()`. Use it in every `catch` block instead of inline error extraction.
+
+## Data Model
+
+20 tables. `Plan` is global (no `tenant_id`); all others are scoped by `tenant_id`:
+
+```
+Plan (global) ── Tenant ──┬── User (OWNER / CASHIER, optional branchId)
+                           ├── Branch
+                           ├── BranchOrderSequence  (atomic order# per branch+period)
+                           ├── Category ── Product (price, imageUrl)
+                           ├── Order ──┬── OrderItem  (productName + unitPrice snapshot)
+                           │           └── OrderPayment  (method, amount — N per order)
+                           ├── CashSession ── Expense ── ExpenseItem  (quantity, unitPrice, totalPrice)
+                           │                     │
+                           │                     └── links to ExpenseCategory (optional)
+                           ├── ExpenseCategory  (name, icon, isActive, trackQuantity, sortOrder — per tenant)
+                           ├── Customer (name, phone, email)
+                           └── Raffle ──┬── RafflePrize  (position, prizeDescription)
+                                        ├── RaffleTicket  (customer, order link — orderId null for SPENDING_THRESHOLD)
+                                        ├── RaffleWinner  (position, voided flag)
+                                        └── CustomerRaffleSpending  (totalSpent per customer per raffle — SPENDING_THRESHOLD only)
+```
+
+Prisma schema: `backend/prisma/schema.prisma`. All enums stored as plain strings in DB.
+
+### Split payments
+
+`Order.paymentMethod` stores the **dominant** method (highest amount) for backward compat and display. The `order_payments` table stores one row per partial payment. Use cases validate that `SUM(payments.amount) == order.total` (±0.01 tolerance). Reports and cash-session totals aggregate from `order_payments`, not from `orders.payment_method`.
+
+### SaaS plans and module flags
+
+`Tenant.plan` references a `Plan` row (`BASICO` | `PRO` | `NEGOCIO`). Each plan defines capacity limits (`maxBranches`, `maxCashiers`, `maxProducts`, `kitchenEnabled`). Use cases check these limits before creating branches, cashiers, or products.
+
+`Tenant` also has per-tenant module flags set exclusively by the admin (not the tenant owner): `ordersEnabled`, `cashEnabled`, `teamEnabled`, `branchesEnabled`, `kitchenEnabled`, `rafflesEnabled`. These are read by `GET /auth/me` and applied client-side via `applyModules()` in `auth.context.tsx` every login — they populate `settings.store.ts` but are **not** persisted to localStorage.
+
+Each `Plan` also defines `kitchenEnabled` and `rafflesEnabled` as defaults; the per-tenant flags take precedence when set by the admin.
+
+### Tenant settings
+
+`Tenant.orderNumberResetPeriod` (DAILY | MONTHLY) controls when `order_number` resets to 1. The SQL uses `DATE()` for daily and `DATE_TRUNC('month', …)` for monthly. Order sequences are stored atomically in `BranchOrderSequence` to avoid race conditions.
+
+Branding fields on `Tenant`: `logoUrl`, `businessAddress`, `businessPhone`, `receiptSlogan` — configurable by the owner via `PATCH /tenants/settings`.
+
+Timezone is handled correctly: `toBoliviaDateString()` in `backend/src/common/utils/timezone.util.ts` uses `America/La_Paz` (UTC-4) for all date calculations including order number resets.
+
+## Shared Package
+
+`packages/shared/src/` exports enums and DTO types. **The backend imports from the compiled `dist/` folder** (via tsconfig paths). Always run `pnpm --filter @pos/shared build` after editing shared types before typechecking the backend.
+
+Key enums: `UserRole`, `OrderType`, `OrderStatus`, `PaymentMethod`, `CashSessionStatus`, `ExpenseCategory` (legacy enum — kept for the `Expense.category` string field; custom per-tenant categories are now the `ExpenseCategory` DB model), `OrderNumberResetPeriod`, `SaasPlan`. Raffle types (`RaffleStatus`: ACTIVE | CLOSED | DRAWING | DRAWN; `RaffleTicketMode`: PRODUCT_MATCH | SPENDING_THRESHOLD) are string literal union types defined in `packages/shared/src/types/raffle.types.ts`, not TypeScript enums.
+
+`SOCKET_EVENTS` (in `packages/shared/src/socket-events.ts`) is the canonical map of all Socket.IO event name strings. Both the backend emitter and frontend subscriber must import from here.
+
+## Environment Variables (backend)
+
+Two template files exist:
+- `backend/.env.example` — local dev defaults, copy to `backend/.env`
+- `.env.production.example` — production template with `CHANGE_ME` placeholders, copy to `.env` on the VPS
+
+```
+DATABASE_URL     postgresql://...  (dev: localhost:5433/pos_db with pos_user/pos_password)
+JWT_SECRET       Required. Generate: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+JWT_EXPIRATION   (default: 24h)
+PORT             (default: 3000)
+FRONTEND_URL     (default: http://localhost:5173) — used for CORS
+ADMIN_SECRET     x-admin-key header value for /admin/* routes.
+                 If unset, AdminGuard returns 401 — no fallback.
+                 Dev default in backend/.env.example: dev-admin-secret
+                 Production: must be set to a strong secret.
+NODE_ENV         development | production
+TZ               America/La_Paz — set at container level in docker-compose.prod.yml; ensures correct timezone for cron, logs, and any node Date calls that leak past the utility layer
+GRAFANA_ADMIN_USER      (default: admin) — Grafana UI login
+GRAFANA_ADMIN_PASSWORD  Required in production. Grafana accessible at :3001; use SSH tunnel or firewall rule.
+```
+
+## CI/CD
+
+Two workflows in `.github/workflows/`:
+
+- **`ci.yml`** — runs on PRs and non-main branches: `pnpm --filter @pos/shared build`, then `typecheck` + `lint` on backend and frontend.
+- **`cd.yml`** — runs on every push to `main`:
+  1. **Validate** — same shared-build + typecheck as CI.
+  2. **Build & push** — multi-stage Docker images → GitHub Container Registry (`ghcr.io/albertoamas/restaurant`).
+  3. **Deploy** — SSH into VPS (pre-flight disk-space check < 500 MB threshold), update `IMAGE_TAG`, pull images, `docker-compose -f docker-compose.prod.yml up -d`, then prune old images.
+
+Migrations run automatically on backend container start (`prisma migrate deploy` in entrypoint).
+
+## Production Deployment
+
+`docker-compose.prod.yml`: three services — `postgres`, `backend`, `frontend`/nginx.
+
+- Uploads persist via Docker volume `uploads_data`. Backup script: `scripts/backup-db.sh` (pg_dump + uploads tar). Schedule with cron: `0 3 * * * /opt/pos/scripts/backup-db.sh`.
+- nginx proxies `/api/`, `/uploads/`, `/socket.io/` to backend; stays on HTTP internally.
+- `/uploads/<uuid>.<ext>` files are **publicly accessible** — any URL is guessable if the UUID leaks. Acceptable for product/logo images; do not store sensitive files here.
+- TLS: Cloudflare orange-cloud proxy, SSL/TLS set to "Full".
+
+## Reference Docs
+
+- `docs/linked-cuddling-mountain.md` — VPS initial deployment steps
+- `docs/plan-auditoria-360.md` — pre-sale multi-restaurant audit plan
+- `docs/cierre-ejecutivo-readiness.md` — executive readiness checklist

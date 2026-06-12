@@ -1,0 +1,238 @@
+import { useState } from 'react';
+import toast from 'react-hot-toast';
+import { useQueryClient } from '@tanstack/react-query';
+import { handleApiError } from '../utils/api-error';
+import type { OrderDto } from '@pos/shared';
+import { PaymentMethod, OrderType } from '@pos/shared';
+import type { CustomerPayload, PaymentEntry } from '../components/pos/PaymentModal';
+import { ordersApi } from '../api/orders.api';
+import { useCartStore } from '../store/cart.store';
+import { useAuth } from '../context/auth.context';
+import { useCashSessionStore } from '../store/cashSession.store';
+import { CategoryTabs } from '../components/pos/CategoryTabs';
+import { Icon } from '../components/ui/Icon';
+import { ProductGrid } from '../components/pos/ProductGrid';
+import { OrderPanel } from '../components/pos/OrderPanel';
+import { PaymentModal } from '../components/pos/PaymentModal';
+import { OrderSuccessModal } from '../components/pos/OrderSuccessModal';
+import { printKitchenTicket } from '../utils/print';
+import { useSettingsStore } from '../store/settings.store';
+import { useProducts } from '../hooks/useProducts';
+import { useCategories } from '../hooks/useCategories';
+import { useBranches } from '../hooks/useBranches';
+
+export function PosPage() {
+  const queryClient = useQueryClient();
+  const { categories } = useCategories();
+  const { products } = useProducts();
+  const { branches } = useBranches();
+
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [showPayment, setShowPayment] = useState(false);
+  const [showCart, setShowCart] = useState(false);
+  const [lastOrder, setLastOrder] = useState<OrderDto | null>(null);
+
+  const { items, notes, addItem, getTotal, getItemCount, clear } = useCartStore();
+  const { currentBranchId, user } = useAuth();
+  const { autoPrintKitchen, cashEnabled } = useSettingsStore();
+  const { isOpen: isCashOpen } = useCashSessionStore();
+
+  const invalidateOrderCaches = () => {
+    queryClient.invalidateQueries({ queryKey: ['orders'] });
+    queryClient.invalidateQueries({ queryKey: ['kitchenOrders'] });
+  };
+
+  const currentBranch = branches.find((b) => b.id === currentBranchId);
+
+  const filteredProducts = products.filter((p) => {
+    const matchesCategory = selectedCategory ? p.categoryId === selectedCategory : true;
+    const matchesSearch = search.trim()
+      ? p.name.toLowerCase().includes(search.trim().toLowerCase())
+      : true;
+    return matchesCategory && matchesSearch;
+  });
+
+  const handleProductSelect = (product: { id: string; name: string; price: number }) => {
+    addItem({ id: product.id, name: product.name, price: product.price });
+  };
+
+  const handleCharge = () => {
+    if (!currentBranchId) {
+      toast.error('Selecciona una sucursal antes de crear un pedido');
+      return;
+    }
+    setShowPayment(true);
+  };
+
+  const handleConfirmPayment = async (payments: PaymentEntry[], customer: CustomerPayload, orderType: OrderType) => {
+    const hasCash = payments.some((p) => p.method === PaymentMethod.CASH);
+    if (cashEnabled && hasCash && !isCashOpen()) {
+      toast.error('No hay caja abierta. Ve a Caja y abre el turno antes de cobrar en efectivo.', { duration: 4000 });
+      throw new Error('cash_session_closed');
+    }
+    try {
+      const order = await ordersApi.create({
+        branchId: currentBranchId ?? undefined,
+        type: orderType,
+        payments: payments.map((p) => ({ method: p.method, amount: p.amount })),
+        notes: notes.trim() || undefined,
+        items: items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+        ...(customer?.customerId ? { customerId: customer.customerId } : {}),
+        ...(customer?.createCustomer ? { createCustomer: customer.createCustomer } : {}),
+      });
+      invalidateOrderCaches();
+      clear();
+      setShowPayment(false);
+      setShowCart(false);
+      setLastOrder(order);
+      if (autoPrintKitchen) printKitchenTicket(order);
+    } catch (err) {
+      handleApiError(err, 'Error al crear pedido');
+    }
+  };
+
+  return (
+    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
+      {/* Left: Products */}
+      <div className="flex-1 flex flex-col p-3 sm:p-4 overflow-hidden">
+        <div className="mb-3 rounded-2xl border border-white/8 shadow-[0_8px_24px_oklch(0.06_0.010_38/0.6)] p-3 sm:p-4 animate-slide" style={{ background: 'var(--color-surface-card)' }}>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+            <div>
+              <h2 className="font-heading text-lg sm:text-xl font-black text-gray-900 leading-tight">Punto de Venta</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Selecciona productos y cobra en segundos.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary-100/60 border border-primary-500/25 text-xs font-semibold text-primary-400">
+                {filteredProducts.length} productos
+              </span>
+              {currentBranch && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse-dot" />
+                  {currentBranch.name}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="relative">
+            <Icon
+              name="search"
+              size={16}
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
+            />
+            <input
+              type="text"
+              placeholder="Buscar producto..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-10 pr-10 py-2.5 text-sm border border-white/10 rounded-2xl bg-white/5 text-gray-700 placeholder:text-gray-400
+                focus:outline-none focus:ring-[3px] focus:ring-primary-500/20 focus:border-primary-500/50
+                transition-[border-color,box-shadow] duration-150"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                aria-label="Limpiar búsqueda"
+              >
+                <Icon name="x" size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <CategoryTabs
+          categories={categories}
+          selected={selectedCategory}
+          onSelect={(cat) => { setSelectedCategory(cat); setSearch(''); }}
+        />
+        <div className="flex-1 overflow-y-auto mt-3 rounded-2xl border border-white/6 p-2 shadow-[0_6px_20px_oklch(0.06_0.010_38/0.5)]" style={{ background: 'var(--color-surface-2)' }}>
+          <ProductGrid products={filteredProducts} onSelect={handleProductSelect} />
+        </div>
+      </div>
+
+      {/* Right: Order panel (desktop) */}
+      <div className="hidden lg:block w-80 border-l border-white/8" style={{ background: 'var(--color-surface-card)' }}>
+        <OrderPanel onCharge={handleCharge} />
+      </div>
+
+      {/* Mobile: floating cart button */}
+      <div className="lg:hidden fixed bottom-20 right-4 z-30">
+        {getItemCount() > 0 && (
+          <button
+            onClick={() => setShowCart(true)}
+            className={[
+              'bg-primary-600 text-white border border-primary-600',
+              'rounded-2xl px-5 py-3.5 text-sm font-bold',
+              'shadow-[0_3px_12px_oklch(0.60_0.22_42/0.40)]',
+              'flex items-center gap-2.5',
+              'hover:bg-primary-500 transition-colors',
+            ].join(' ')}
+          >
+            <div className="relative">
+              <Icon name="cart" size={20} />
+              <span className="absolute -top-2 -right-2 w-4 h-4 bg-white text-primary-700 text-[10px] font-black rounded-full flex items-center justify-center">
+                {getItemCount()}
+              </span>
+            </div>
+            Bs {getTotal().toFixed(2)}
+          </button>
+        )}
+      </div>
+
+      {/* Mobile: cart drawer */}
+      {showCart && (
+        <div className="lg:hidden fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowCart(false)} />
+          <div className="absolute bottom-0 left-0 right-0 h-[82vh] rounded-t-2xl overflow-hidden animate-slide-sheet flex flex-col border-t border-white/8" style={{ background: 'var(--color-surface-card)' }}>
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1 shrink-0">
+              <div className="w-10 h-1 bg-gray-200 rounded-full" />
+            </div>
+            <div className="flex-1 min-h-0">
+              <OrderPanel onCharge={handleCharge} onClose={() => setShowCart(false)} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <PaymentModal
+        isOpen={showPayment}
+        onClose={() => setShowPayment(false)}
+        total={getTotal()}
+        onConfirm={handleConfirmPayment}
+        allowCortesia={user?.role === 'OWNER'}
+        onDeferPayment={async (customer, orderType) => {
+          try {
+            const order = await ordersApi.create({
+              branchId: currentBranchId ?? undefined,
+              type: orderType,
+              payments: [],
+              notes: notes.trim() || undefined,
+              items: items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+              ...(customer?.customerId ? { customerId: customer.customerId } : {}),
+              ...(customer?.createCustomer ? { createCustomer: customer.createCustomer } : {}),
+            });
+            invalidateOrderCaches();
+            clear();
+            setShowPayment(false);
+            setShowCart(false);
+            setLastOrder(order);
+            if (autoPrintKitchen) printKitchenTicket(order);
+          } catch (err) {
+            handleApiError(err, 'Error al crear pedido');
+          }
+        }}
+      />
+
+      {lastOrder && (
+        <OrderSuccessModal
+          isOpen
+          onClose={() => setLastOrder(null)}
+          order={lastOrder}
+        />
+      )}
+    </div>
+  );
+}

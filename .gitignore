@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+.env
+docs/
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+.nyc_output/
+*.tsbuildinfo
+test-results/
+
+# Scripts de seed personales — seed.ts permanece (requerido para dev setup)
+backend/src/seed-*.ts
+
+# Uploads locales — en producción se almacenan en el volumen Docker uploads_data
+backend/uploads/*.webp
+backend/uploads/*.jpg
+backend/uploads/*.jpeg
+backend/uploads/*.png
+backend/uploads/*.gif

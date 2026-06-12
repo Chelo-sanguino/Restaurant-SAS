@@ -1,0 +1,448 @@
+import { useRef, useState } from 'react';
+import toast from 'react-hot-toast';
+import { OrderNumberResetPeriod } from '@pos/shared';
+import { useSettingsStore } from '../store/settings.store';
+import { useAuth } from '../context/auth.context';
+import { usersApi } from '../api/users.api';
+import { adminApi } from '../api/admin.api';
+import { tenantsApi } from '../api/tenants.api';
+import { ordersApi } from '../api/orders.api';
+import { uploadsApi } from '../api/uploads.api';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Toggle } from '../components/ui/Toggle';
+import { Icon } from '../components/ui/Icon';
+import { PageShell } from '../components/ui/PageShell';
+import { handleApiError } from '../utils/api-error';
+
+const SETTINGS_UNLOCK_KEY = 'pos_settings_unlocked';
+
+function SettingsLock({ onUnlock }: { onUnlock: () => void }) {
+  const [key, setKey] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      await adminApi.ping(key.trim());
+      sessionStorage.setItem(SETTINGS_UNLOCK_KEY, '1');
+      onUnlock();
+    } catch {
+      setError('Clave incorrecta');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-4 sm:p-6 max-w-sm mx-auto mt-16 animate-in">
+      <div className="rounded-2xl border border-white/8 shadow-[0_10px_30px_oklch(0.06_0.010_38/0.6)] p-8 text-center" style={{ background: 'var(--color-surface-card)' }}>
+        <div className="w-14 h-14 rounded-2xl bg-primary-100 border border-primary-200 flex items-center justify-center mx-auto mb-5">
+          <Icon name="lock" size={28} className="text-primary-600" />
+        </div>
+        <h2 className="font-heading font-black text-xl text-gray-900 mb-1">Ajustes protegidos</h2>
+        <p className="text-sm text-gray-500 mb-6">Esta sección es solo para el administrador del sistema.</p>
+        <form onSubmit={handleSubmit} className="space-y-3 text-left">
+          <Input
+            label="Clave de administrador"
+            type="password"
+            placeholder="••••••••"
+            value={key}
+            onChange={(e) => { setKey(e.target.value); setError(''); }}
+            autoFocus
+            required
+          />
+          {error && <p className="text-xs text-red-500 font-medium">{error}</p>}
+          <Button type="submit" fullWidth loading={loading}>
+            {loading ? 'Verificando...' : 'Desbloquear'}
+          </Button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+interface SettingRowProps {
+  label: string;
+  description: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  icon: React.ReactNode;
+}
+
+function SettingRow({ label, description, value, onChange, icon }: SettingRowProps) {
+  return (
+    <div className={[
+      'flex items-center justify-between py-4 px-1 rounded-xl transition-colors',
+      value ? 'bg-primary-50/40' : '',
+    ].join(' ')}>
+      <div className="flex items-start gap-3 flex-1 pr-4">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+          value ? 'bg-primary-100 text-primary-600' : 'bg-gray-100 text-gray-400'
+        }`}>
+          {icon}
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-gray-900">{label}</p>
+          <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{description}</p>
+        </div>
+      </div>
+      <Toggle checked={value} onChange={() => onChange(!value)} />
+    </div>
+  );
+}
+
+const RECEIPT_MAX = 120;
+const EMPTY_PW = { currentPassword: '', newPassword: '', confirmPassword: '' };
+
+export function SettingsPage() {
+  const { user } = useAuth();
+  const {
+    autoPrintKitchen, setAutoPrintKitchen,
+    businessAddress, setBusinessAddress,
+    businessPhone, setBusinessPhone,
+    receiptSlogan, setReceiptSlogan,
+    orderNumberResetPeriod, setOrderNumberResetPeriod,
+    tenantLogo, setTenantLogo,
+  } = useSettingsStore();
+
+  const saveReceiptField = async (field: 'businessAddress' | 'businessPhone' | 'receiptSlogan', value: string) => {
+    try {
+      await tenantsApi.updateSettings({ [field]: value || null });
+    } catch (err) {
+      handleApiError(err, 'Error al guardar');
+    }
+  };
+
+  const [resetPeriodLoading, setResetPeriodLoading] = useState(false);
+  const [resetNowConfirm, setResetNowConfirm] = useState(false);
+  const [resetNowLoading, setResetNowLoading] = useState(false);
+  const [logoLoading, setLogoLoading] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+
+  const [unlocked, setUnlocked] = useState(() =>
+    sessionStorage.getItem(SETTINGS_UNLOCK_KEY) === '1',
+  );
+  const [pw, setPw] = useState(EMPTY_PW);
+  const [pwLoading, setPwLoading] = useState(false);
+
+  if (!unlocked) return <SettingsLock onUnlock={() => setUnlocked(true)} />;
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogoLoading(true);
+    try {
+      const url = await uploadsApi.image(file);
+      await tenantsApi.updateSettings({ logoUrl: url });
+      setTenantLogo(url);
+      toast.success('Logo actualizado');
+    } catch (err) {
+      handleApiError(err, 'Error al subir logo');
+    } finally {
+      setLogoLoading(false);
+      if (logoInputRef.current) logoInputRef.current.value = '';
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    setLogoLoading(true);
+    try {
+      await tenantsApi.updateSettings({ logoUrl: null });
+      setTenantLogo(null);
+      toast.success('Logo eliminado');
+    } catch (err) {
+      handleApiError(err, 'Error al eliminar logo');
+    } finally {
+      setLogoLoading(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pw.newPassword !== pw.confirmPassword) {
+      toast.error('Las contraseñas nuevas no coinciden');
+      return;
+    }
+    setPwLoading(true);
+    try {
+      await usersApi.changePassword({
+        currentPassword: pw.currentPassword,
+        newPassword: pw.newPassword,
+      });
+      toast.success('Contraseña actualizada');
+      setPw(EMPTY_PW);
+    } catch (err) {
+      handleApiError(err, 'Error al cambiar contraseña');
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
+  return (
+    <PageShell maxWidth="3xl" className="space-y-4">
+      <div className="rounded-2xl border border-white/8 shadow-[0_10px_30px_oklch(0.06_0.010_38/0.6)] p-4 sm:p-5" style={{ background: 'var(--color-surface-card)' }}>
+        <h2 className="font-heading text-xl sm:text-2xl font-black text-gray-900">Ajustes del Negocio</h2>
+        <p className="text-xs text-gray-500 mt-1">Configura impresión, datos del recibo y seguridad de acceso.</p>
+      </div>
+
+      {/* Business data */}
+      <Card variant="panel">
+        <div className="flex items-center gap-2 mb-1">
+          <Icon name="building" size={16} className="text-gray-400 shrink-0" />
+          <h3 className="text-sm font-bold text-gray-700">Datos del negocio</h3>
+        </div>
+        <p className="text-xs text-gray-400 mb-4 ml-6">Aparecen en el recibo que se entrega al cliente</p>
+        <div className="divide-y divide-gray-100">
+          <div className="py-4">
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Nombre del negocio</label>
+            <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+              <span className="text-sm font-semibold text-gray-800">{user?.tenantName || '—'}</span>
+              <span className="ml-auto text-xs text-gray-400 bg-gray-200 rounded-md px-2 py-0.5">Solo lectura</span>
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5">Se define al registrarse. Contacta soporte para cambiarlo.</p>
+          </div>
+          <div className="py-4">
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Logo del negocio</label>
+            <p className="text-xs text-gray-400 mb-3">Se muestra en el recibo del cliente. PNG o WEBP, fondo blanco o transparente recomendado.</p>
+            <div className="flex items-center gap-4">
+              {tenantLogo ? (
+                <div className="w-20 h-20 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
+                  <img src={tenantLogo} alt="Logo" className="max-w-full max-h-full object-contain" />
+                </div>
+              ) : (
+                <div className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 flex items-center justify-center shrink-0">
+                  <Icon name="photo" size={28} strokeWidth={1.5} className="text-gray-300" />
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={handleLogoUpload}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  loading={logoLoading}
+                  onClick={() => logoInputRef.current?.click()}
+                >
+                  {tenantLogo ? 'Cambiar logo' : 'Subir logo'}
+                </Button>
+                {tenantLogo && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    loading={logoLoading}
+                    onClick={handleLogoRemove}
+                    className="text-red-500 hover:text-red-600 text-xs"
+                  >
+                    Eliminar logo
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="py-4">
+            <Input
+              label="Dirección"
+              value={businessAddress}
+              onChange={(e) => setBusinessAddress(e.target.value)}
+              onBlur={(e) => saveReceiptField('businessAddress', e.target.value)}
+              placeholder="Ej: Av. Los Pinos 123, Santa Cruz"
+            />
+          </div>
+          <div className="py-4">
+            <Input
+              label="Teléfono"
+              value={businessPhone}
+              onChange={(e) => setBusinessPhone(e.target.value)}
+              onBlur={(e) => saveReceiptField('businessPhone', e.target.value)}
+              placeholder="Ej: +591 77712345"
+            />
+          </div>
+          <div className="py-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium text-gray-700">Eslogan del recibo</label>
+              <span className={`text-xs font-medium ${receiptSlogan.length > RECEIPT_MAX ? 'text-red-500' : 'text-gray-400'}`}>
+                {receiptSlogan.length}/{RECEIPT_MAX}
+              </span>
+            </div>
+            <textarea
+              value={receiptSlogan}
+              onChange={(e) => setReceiptSlogan(e.target.value)}
+              onBlur={(e) => saveReceiptField('receiptSlogan', e.target.value)}
+              placeholder="Ej: El mejor sabor de la ciudad"
+              rows={2}
+              maxLength={RECEIPT_MAX}
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5
+                focus:outline-none focus:ring-[3px] focus:ring-primary-500/20 focus:border-primary-500
+                resize-none transition-[border-color,box-shadow] bg-[var(--color-surface-card)] text-gray-700"
+            />
+            <p className="text-xs text-gray-400 mt-1.5">Aparece debajo del nombre del negocio en el recibo</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Order numbering */}
+      <Card variant="panel">
+        <div className="flex items-center gap-2 mb-1">
+          <Icon name="hash" size={16} className="text-gray-400 shrink-0" />
+          <h3 className="text-sm font-bold text-gray-700">Numeración de pedidos</h3>
+        </div>
+        <p className="text-xs text-gray-400 mb-4 ml-6">Define cada cuándo se reinicia el contador de pedidos (#1, #2, #3…)</p>
+        <div className="flex gap-3">
+          {[
+            { value: OrderNumberResetPeriod.DAILY,   label: 'Diario',   desc: 'Se reinicia cada día' },
+            { value: OrderNumberResetPeriod.MONTHLY, label: 'Mensual',  desc: 'Se reinicia cada mes' },
+          ].map((opt) => {
+            const active = orderNumberResetPeriod === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                disabled={resetPeriodLoading}
+                onClick={async () => {
+                  if (active) return;
+                  setResetPeriodLoading(true);
+                  try {
+                    await tenantsApi.updateSettings({ orderNumberResetPeriod: opt.value });
+                    setOrderNumberResetPeriod(opt.value);
+                    toast.success('Configuración guardada');
+                  } catch (err) {
+                    handleApiError(err, 'Error al guardar');
+                  } finally {
+                    setResetPeriodLoading(false);
+                  }
+                }}
+                className={[
+                  'flex-1 rounded-xl border-2 px-4 py-3 text-left transition-all',
+                  active
+                    ? 'border-primary-400 bg-primary-50 text-primary-800'
+                    : 'border-white/10 bg-white/5 text-gray-500 hover:border-white/18',
+                  resetPeriodLoading ? 'opacity-50 cursor-not-allowed' : '',
+                ].join(' ')}
+              >
+                <p className="text-sm font-semibold">{opt.label}</p>
+                <p className="text-xs mt-0.5 opacity-70">{opt.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          {!resetNowConfirm ? (
+            <button
+              type="button"
+              onClick={() => setResetNowConfirm(true)}
+              className="flex items-center gap-2 text-sm text-gray-500 hover:text-amber-600 transition-colors group"
+            >
+              <Icon name="refresh" size={16} className="group-hover:text-amber-500 transition-colors" />
+              Reiniciar contador ahora
+            </button>
+          ) : (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="text-sm font-semibold text-amber-900 mb-0.5">¿Reiniciar el contador ahora?</p>
+              <p className="text-xs text-amber-700 mb-3">
+                El próximo pedido empezará desde <strong>#1</strong>. Los pedidos existentes conservan su número.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setResetNowConfirm(false)}
+                  disabled={resetNowLoading}
+                  className="text-xs py-1.5 px-3 h-auto"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  variant="primary"
+                  loading={resetNowLoading}
+                  onClick={async () => {
+                    setResetNowLoading(true);
+                    try {
+                      await ordersApi.resetSequence();
+                      toast.success('Contador reiniciado — el próximo pedido será #1');
+                      setResetNowConfirm(false);
+                    } catch (err) {
+                      handleApiError(err, 'Error al reiniciar contador');
+                    } finally {
+                      setResetNowLoading(false);
+                    }
+                  }}
+                  className="text-xs py-1.5 px-3 h-auto"
+                >
+                  Sí, reiniciar
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Printing */}
+      <Card variant="panel">
+        <div className="flex items-center gap-2 mb-1">
+          <Icon name="print" size={16} className="text-gray-400 shrink-0" />
+          <h3 className="text-sm font-bold text-gray-700">Impresión</h3>
+        </div>
+        <p className="text-xs text-gray-400 mb-4 ml-6">Opciones de impresión de comandas</p>
+        <div className="space-y-1">
+          <SettingRow
+            label="Imprimir comanda automáticamente"
+            description="Al confirmar un pedido, se envía la comanda a la impresora de cocina sin clic adicional."
+            value={autoPrintKitchen}
+            onChange={setAutoPrintKitchen}
+            icon={<Icon name="print" size={16} />}
+          />
+        </div>
+      </Card>
+
+      {/* Password change */}
+      <Card variant="panel">
+        <div className="flex items-center gap-2 mb-1">
+          <Icon name="lock" size={16} className="text-gray-400 shrink-0" />
+          <h3 className="text-sm font-bold text-gray-700">Seguridad</h3>
+        </div>
+        <p className="text-xs text-gray-400 mb-4 ml-6">Cambia tu contraseña de acceso</p>
+        <form onSubmit={handleChangePassword} className="space-y-3">
+          <Input
+            label="Contraseña actual"
+            type="password"
+            autoComplete="current-password"
+            value={pw.currentPassword}
+            onChange={(e) => setPw({ ...pw, currentPassword: e.target.value })}
+            required
+          />
+          <Input
+            label="Nueva contraseña"
+            type="password"
+            autoComplete="new-password"
+            value={pw.newPassword}
+            onChange={(e) => setPw({ ...pw, newPassword: e.target.value })}
+            minLength={6}
+            required
+          />
+          <Input
+            label="Confirmar nueva contraseña"
+            type="password"
+            autoComplete="new-password"
+            value={pw.confirmPassword}
+            onChange={(e) => setPw({ ...pw, confirmPassword: e.target.value })}
+            minLength={6}
+            required
+          />
+          <Button type="submit" loading={pwLoading}>
+            Cambiar contraseña
+          </Button>
+        </form>
+      </Card>
+    </PageShell>
+  );
+}

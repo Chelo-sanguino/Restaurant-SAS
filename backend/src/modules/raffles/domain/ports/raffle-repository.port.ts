@@ -1,0 +1,113 @@
+import { RaffleDetailDto, RaffleDto } from '@pos/shared';
+import { Raffle, RaffleStatus } from '../entities/raffle.entity';
+import { RaffleWinner } from '../entities/raffle-winner.entity';
+
+export const RAFFLE_REPOSITORY_PORT = 'RaffleRepositoryPort';
+
+/** Datos mínimos para crear un ticket — el número secuencial lo asigna el repositorio. */
+export interface NewTicketInput {
+  id: string;
+  tenantId: string;
+  raffleId: string;
+  customerId: string;
+  orderId: string | null;
+  createdAt: Date;
+}
+
+export interface SpendingResult {
+  newTotal: number;
+}
+
+export interface RaffleRepositoryPort {
+  /** Persiste un sorteo nuevo junto con sus premios en una sola transacción. */
+  createRaffle(raffle: Raffle): Promise<void>;
+
+  /** Actualiza estado y metadatos del sorteo. No toca la tabla de premios. */
+  saveRaffle(raffle: Raffle): Promise<void>;
+
+  findRaffleById(id: string, tenantId: string): Promise<Raffle | null>;
+  findAllRaffles(tenantId: string): Promise<RaffleDto[]>;
+  findRaffleWithTickets(id: string, tenantId: string): Promise<RaffleDetailDto | null>;
+
+  /** Retorna sorteos ACTIVE con ticketMode PRODUCT_MATCH cuyos productId estén en la lista. */
+  findActiveRafflesForProducts(tenantId: string, productIds: string[]): Promise<Raffle[]>;
+
+  /** Retorna sorteos ACTIVE con ticketMode SPENDING_THRESHOLD. */
+  findActiveSpendingRaffles(tenantId: string): Promise<Raffle[]>;
+
+  /** Retorna sorteos ACTIVE o CLOSED con ticketMode SPENDING_THRESHOLD (para revertir al cancelar). */
+  findRevertibleSpendingRaffles(tenantId: string): Promise<Raffle[]>;
+
+  /**
+   * Inserta tickets asignando números secuenciales de forma atómica.
+   * Usa SELECT FOR UPDATE sobre la fila del sorteo para serializar
+   * inserciones concurrentes y evitar colisiones en el índice UNIQUE(raffleId, ticketNumber).
+   */
+  addTickets(raffleId: string, inputs: NewTicketInput[]): Promise<void>;
+
+  deleteRaffle(id: string, tenantId: string): Promise<void>;
+
+  /** Borra tickets ligados a una orden (modo PRODUCT_MATCH) de sorteos no en DRAWING/DRAWN. */
+  deleteTicketsByOrderId(tenantId: string, orderId: string): Promise<void>;
+
+  findWinnersByRaffleId(raffleId: string, tenantId: string): Promise<RaffleWinner[]>;
+  voidWinner(winnerId: string, raffleId: string, tenantId: string): Promise<void>;
+
+  /**
+   * Inserta un ganador y actualiza el estado del sorteo de forma atómica.
+   * Usa advisory lock de PostgreSQL para serializar sorteos concurrentes.
+   * Lanza ConflictException si la posición ya tiene un ganador activo.
+   */
+  drawWinnerAtomic(id: string, tenantId: string, winner: RaffleWinner, newStatus: RaffleStatus): Promise<void>;
+
+  // ── Spending threshold ────────────────────────────────────────────────────
+
+  /**
+   * Suma `amount` al gasto acumulado del cliente en el sorteo (upsert atómico).
+   * Retorna el nuevo total acumulado tras la suma.
+   */
+  addCustomerSpending(
+    tenantId: string,
+    raffleId: string,
+    customerId: string,
+    amount: number,
+  ): Promise<SpendingResult>;
+
+  /**
+   * Resta `amount` del gasto acumulado del cliente (mínimo 0).
+   * Retorna el nuevo total acumulado tras la resta.
+   */
+  subtractCustomerSpending(
+    tenantId: string,
+    raffleId: string,
+    customerId: string,
+    amount: number,
+  ): Promise<SpendingResult>;
+
+  /** Cuenta los tickets actuales del cliente en el sorteo. */
+  countTicketsByCustomer(tenantId: string, raffleId: string, customerId: string): Promise<number>;
+
+  /**
+   * Borra los `excessCount` tickets más recientes del cliente en el sorteo.
+   * Solo actúa si el sorteo está en ACTIVE o CLOSED (no en DRAWING/DRAWN).
+   */
+  deleteExcessTicketsByCustomer(
+    tenantId: string,
+    raffleId: string,
+    customerId: string,
+    excessCount: number,
+  ): Promise<void>;
+
+  /** Marca los tickets indicados como entregados físicamente. Solo actualiza los no entregados aún. */
+  deliverTickets(raffleId: string, ticketIds: string[], tenantId: string): Promise<void>;
+
+  /** Revierte la entrega de los tickets indicados. Solo actualiza los ya entregados. */
+  undeliverTickets(raffleId: string, ticketIds: string[], tenantId: string): Promise<void>;
+
+  /** Actualiza nombre, descripción y/o textos de premios. No toca numberOfWinners, ticketMode ni posiciones. */
+  updateRaffle(
+    id: string,
+    tenantId: string,
+    data: { name?: string; description?: string | null; prizes?: Array<{ position: number; prizeDescription: string }> },
+  ): Promise<void>;
+}

@@ -1,0 +1,459 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Plan ─────────────────────────────────────────────────────
+
+model Plan {
+  id             String   @id              // 'BASICO' | 'PRO' | 'NEGOCIO'
+  displayName    String   @map("display_name")
+  priceBs        Decimal  @map("price_bs") @db.Decimal(10, 2)
+  maxBranches    Int      @map("max_branches")   // -1 = unlimited
+  maxCashiers    Int      @map("max_cashiers")
+  maxProducts    Int      @map("max_products")
+  kitchenEnabled Boolean  @default(false)  @map("kitchen_enabled")
+  rafflesEnabled Boolean  @default(false)  @map("raffles_enabled")
+  createdAt      DateTime @default(now())  @map("created_at")
+  updatedAt      DateTime @updatedAt       @map("updated_at")
+
+  tenants Tenant[]
+
+  @@map("plans")
+}
+
+// ─── Tenant ───────────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Plan — assigned by admin, references plans table
+  plan   String  @default("BASICO")
+  planRel Plan   @relation(fields: [plan], references: [id])
+
+  // Module flags — controlled exclusively by the SaaS admin
+  ordersEnabled   Boolean @default(true)  @map("orders_enabled")
+  cashEnabled     Boolean @default(true)  @map("cash_enabled")
+  teamEnabled     Boolean @default(true)  @map("team_enabled")
+  branchesEnabled Boolean @default(true)  @map("branches_enabled")
+  kitchenEnabled  Boolean @default(false) @map("kitchen_enabled")
+  rafflesEnabled  Boolean @default(false) @map("raffles_enabled")
+
+  // Order settings — configurable by the tenant owner
+  orderNumberResetPeriod String  @default("DAILY") @map("order_number_reset_period")
+
+  // Branding & receipt — configurable by the tenant owner
+  logoUrl         String? @map("logo_url")
+  businessAddress String? @map("business_address") @db.VarChar(255)
+  businessPhone   String? @map("business_phone")   @db.VarChar(50)
+  receiptSlogan   String? @map("receipt_slogan")   @db.VarChar(255)
+
+  users                User[]
+  branches             Branch[]
+  categories           Category[]
+  products             Product[]
+  orders               Order[]
+  cashSessions         CashSession[]
+  expenses             Expense[]
+  expenseCategories    ExpenseCategory[]
+  customers            Customer[]
+  orderPayments        OrderPayment[]
+  branchOrderSequences BranchOrderSequence[]
+  raffles                 Raffle[]
+  raffleTickets           RaffleTicket[]
+  raffleWinners           RaffleWinner[]
+  customerRaffleSpending  CustomerRaffleSpending[]
+
+  @@map("tenants")
+}
+
+// ─── User ─────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  branchId     String?  @map("branch_id")
+  email        String
+  passwordHash String   @map("password_hash")
+  name         String
+  role         String
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+// ─── Branch ───────────────────────────────────────────────────
+
+model Branch {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String
+  address   String?
+  phone     String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("branches")
+}
+
+// ─── Category ─────────────────────────────────────────────────
+
+model Category {
+  id        String  @id @default(uuid())
+  tenantId  String  @map("tenant_id")
+  name      String  @db.VarChar(255)
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@index([tenantId, sortOrder])
+  @@map("categories")
+}
+
+// ─── Product ──────────────────────────────────────────────────
+
+model Product {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  categoryId String   @map("category_id")
+  name       String   @db.VarChar(255)
+  price      Decimal  @db.Decimal(10, 2)
+  imageUrl   String?  @map("image_url") @db.VarChar(1024)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  raffles  Raffle[]
+
+  @@index([tenantId, categoryId])
+  @@map("products")
+}
+
+// ─── Order ────────────────────────────────────────────────────
+
+model Order {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  branchId      String   @map("branch_id")
+  orderNumber   Int      @map("order_number")
+  type          String
+  status        String
+  paymentMethod String?  @map("payment_method")
+  subtotal      Decimal  @db.Decimal(10, 2)
+  total         Decimal  @db.Decimal(10, 2)
+  notes         String?
+  createdBy     String   @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  customerId    String?   @map("customer_id")
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer      Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items         OrderItem[]
+  payments      OrderPayment[]
+  raffleTickets RaffleTicket[]
+
+  @@index([tenantId, orderNumber])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, branchId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@map("orders")
+}
+
+// ─── OrderItem ────────────────────────────────────────────────
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String  @map("order_id")
+  productId   String  @map("product_id")
+  productName String  @map("product_name")
+  quantity    Int
+  unitPrice   Decimal @map("unit_price") @db.Decimal(10, 2)
+  subtotal    Decimal @db.Decimal(10, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// ─── OrderPayment ─────────────────────────────────────────────
+
+model OrderPayment {
+  id       String  @id @default(uuid())
+  orderId  String  @map("order_id")
+  tenantId String  @map("tenant_id")
+  method   String
+  amount   Decimal @db.Decimal(10, 2)
+
+  order  Order  @relation(fields: [orderId],  references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_payments")
+}
+
+// ─── CashSession ──────────────────────────────────────────────
+
+model CashSession {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  branchId       String    @map("branch_id")
+  openedBy       String    @map("opened_by")
+  closedBy       String?   @map("closed_by")
+  openingAmount  Decimal   @map("opening_amount") @db.Decimal(10, 2)
+  closingAmount  Decimal?  @map("closing_amount") @db.Decimal(10, 2)
+  expectedAmount Decimal?  @map("expected_amount") @db.Decimal(10, 2)
+  difference     Decimal?  @db.Decimal(10, 2)
+  status         String
+  openedAt       DateTime  @default(now()) @map("opened_at")
+  closedAt       DateTime? @map("closed_at")
+  notes          String?
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@index([tenantId, branchId])
+  @@map("cash_sessions")
+}
+
+// ─── BranchOrderSequence ──────────────────────────────────────
+// Secuencias atómicas de número de orden por branch y periodo.
+// Sustituye el MAX(order_number)+1 que tenía race condition.
+// period = 'YYYY-MM-DD' (DAILY) o 'YYYY-MM' (MONTHLY).
+
+model BranchOrderSequence {
+  tenantId   String @map("tenant_id")
+  branchId   String @map("branch_id")
+  period     String
+  lastNumber Int    @map("last_number")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, branchId, period])
+  @@map("branch_order_sequences")
+}
+
+// ─── Expense ──────────────────────────────────────────────────
+
+model Expense {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  branchId      String   @map("branch_id")
+  category      String
+  amount        Decimal  @db.Decimal(10, 2)
+  description   String?
+  createdBy     String   @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Vínculo formal con la sesión de caja activa al momento de crear el gasto.
+  // Nullable: si no hay sesión abierta el gasto se registra igual (cash_session_id = NULL).
+  cashSessionId String?     @map("cash_session_id")
+
+  tenant      Tenant       @relation(fields: [tenantId],      references: [id], onDelete: Cascade)
+  cashSession CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  items       ExpenseItem[]
+
+  @@index([tenantId, branchId, createdAt])
+  @@index([cashSessionId], map: "expenses_cash_session_id_idx")
+  @@map("expenses")
+}
+
+// ─── ExpenseCategory ──────────────────────────────────────────
+
+model ExpenseCategory {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  name          String   @db.VarChar(100)
+  icon          String?  @db.VarChar(10)
+  isActive      Boolean  @default(true)  @map("is_active")
+  trackQuantity Boolean  @default(false) @map("track_quantity")
+  sortOrder     Int      @default(0)     @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  ExpenseItem[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("expense_categories")
+}
+
+// ─── ExpenseItem ──────────────────────────────────────────────
+
+model ExpenseItem {
+  id         String   @id @default(uuid())
+  expenseId  String   @map("expense_id")
+  categoryId String?  @map("category_id")
+  name       String   @db.VarChar(255)
+  quantity   Decimal  @db.Decimal(10, 3)
+  unitPrice  Decimal  @map("unit_price") @db.Decimal(10, 2)
+  totalPrice Decimal  @map("total_price") @db.Decimal(10, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  expense  Expense          @relation(fields: [expenseId],  references: [id], onDelete: Cascade)
+  category ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([expenseId])
+  @@map("expense_items")
+}
+
+// ─── Customer ─────────────────────────────────────────────────
+
+model Customer {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String   @db.VarChar(255)
+  phone     String?  @db.VarChar(50)
+  email     String?  @db.VarChar(255)
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant                 Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders                 Order[]
+  raffleTickets          RaffleTicket[]
+  raffleWins             RaffleWinner[]
+  customerRaffleSpending CustomerRaffleSpending[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId, name])
+  @@map("customers")
+}
+
+// ─── Raffle ───────────────────────────────────────────────────
+
+model Raffle {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  name            String   @db.VarChar(255)
+  description     String?  @db.VarChar(500)
+  // ACTIVE → CLOSED → DRAWING (primer ganador sorteado) → DRAWN (todos sorteados)
+  status          String   @default("ACTIVE")
+  numberOfWinners Int      @default(1) @map("number_of_winners")
+  // PRODUCT_MATCH: tickets por compra de producto específico
+  // SPENDING_THRESHOLD: tickets por gasto acumulado (cada N Bs = 1 ticket)
+  ticketMode        String  @default("PRODUCT_MATCH") @map("ticket_mode")
+  spendingThreshold Int?    @map("spending_threshold")
+  productId         String? @map("product_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  tenant                 Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product                Product?                 @relation(fields: [productId], references: [id], onDelete: SetNull)
+  tickets                RaffleTicket[]           @relation("RaffleTickets")
+  prizes                 RafflePrize[]
+  winners                RaffleWinner[]
+  customerSpendings      CustomerRaffleSpending[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, productId])
+  @@map("raffles")
+}
+
+// ─── RafflePrize ──────────────────────────────────────────────
+// Premio por posición, definido al crear el sorteo.
+// position 1 = primer lugar (el más importante).
+
+model RafflePrize {
+  id               String @id @default(uuid())
+  raffleId         String @map("raffle_id")
+  position         Int
+  prizeDescription String @map("prize_description") @db.VarChar(500)
+
+  raffle Raffle @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+
+  @@unique([raffleId, position])
+  @@map("raffle_prizes")
+}
+
+// ─── RaffleWinner ─────────────────────────────────────────────
+// Un registro por cada lugar sorteado.
+// El sorteo avanza de la posición más alta (3°) a la más baja (1°).
+
+model RaffleWinner {
+  id               String   @id @default(uuid())
+  tenantId         String   @map("tenant_id")
+  raffleId         String   @map("raffle_id")
+  customerId       String   @map("customer_id")
+  ticketId         String   @map("ticket_id")
+  position         Int
+  prizeDescription String?  @map("prize_description") @db.VarChar(500)
+  drawnAt          DateTime @default(now()) @map("drawn_at")
+  voided           Boolean  @default(false) @map("voided")
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  raffle   Raffle       @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ticket   RaffleTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // @@unique([raffleId, position]) — reemplazado por índice parcial en DB (WHERE voided = false)
+  @@index([tenantId, raffleId])
+  @@map("raffle_winners")
+}
+
+// ─── RaffleTicket ─────────────────────────────────────────────
+
+model RaffleTicket {
+  id           String    @id @default(uuid())
+  tenantId     String    @map("tenant_id")
+  raffleId     String    @map("raffle_id")
+  customerId   String    @map("customer_id")
+  ticketNumber Int       @map("ticket_number")
+  orderId      String?   @map("order_id")
+  delivered    Boolean   @default(false)
+  deliveredAt  DateTime? @map("delivered_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  raffle   Raffle        @relation("RaffleTickets", fields: [raffleId], references: [id], onDelete: Cascade)
+  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  winners  RaffleWinner[]
+
+  @@unique([raffleId, ticketNumber])
+  @@index([tenantId, raffleId])
+  @@index([tenantId, customerId])
+  @@map("raffle_tickets")
+}
+
+// ─── CustomerRaffleSpending ───────────────────────────────────
+// Acumulado de gasto por cliente por sorteo de tipo SPENDING_THRESHOLD.
+// Un registro por par (raffleId, customerId); se actualiza por upsert.
+// tickets_earned = floor(totalSpent / raffle.spendingThreshold)
+
+model CustomerRaffleSpending {
+  id          String  @id @default(uuid())
+  tenantId    String  @map("tenant_id")
+  raffleId    String  @map("raffle_id")
+  customerId  String  @map("customer_id")
+  totalSpent  Decimal @default(0) @map("total_spent") @db.Decimal(10, 2)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  raffle   Raffle   @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([raffleId, customerId])
+  @@index([tenantId, raffleId])
+  @@map("customer_raffle_spending")
+}
