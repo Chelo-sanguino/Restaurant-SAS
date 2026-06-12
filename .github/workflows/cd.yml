@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false   # queue deploys; never kill a running deploy mid-flight
 
 env:
-  IMAGE_BASE: ghcr.io/albertoamas/restaurant
+  IMAGE_BASE: ghcr.io/chelo-sanguino/restaurant-sas
 
 jobs:
   # ── Build Docker images and push to GitHub Container Registry ────────────────
